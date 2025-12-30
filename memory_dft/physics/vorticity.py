@@ -309,11 +309,19 @@ class GammaExtractor:
         γ_total = γ_local + γ_memory
         
         Args:
-            gamma_total: PySCF（全体2-RDM）から
-            gamma_local: DMRG（局所2-RDM）から
+            gamma_total: ED r=∞（全相関）から
+            gamma_local: ED r≤2（局所相関、Markovian sector）から
             
         Returns:
             γ成分と解釈
+            
+        Note:
+            ED距離フィルターにより導出:
+            - γ_total (r=∞) = 2.604
+            - γ_local (r≤2) = 1.388
+            - γ_memory = 1.216 (46.7%)
+            
+            Ref: Lie & Fullwood, PRL 135, 230204 (2025)
         """
         gamma_memory = gamma_total - gamma_local
         
