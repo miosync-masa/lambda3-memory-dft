@@ -488,10 +488,14 @@ class ChemicalReactionSolver:
         Returns:
             Dictionary with memory indicators
         """
+        # Handle different import contexts (package vs direct execution vs Colab)
         try:
             from .memory_indicators import MemoryIndicator, HysteresisAnalyzer
         except ImportError:
-            from memory_indicators import MemoryIndicator, HysteresisAnalyzer
+            try:
+                from memory_dft.solvers.memory_indicators import MemoryIndicator, HysteresisAnalyzer
+            except ImportError:
+                from memory_indicators import MemoryIndicator, HysteresisAnalyzer
         
         indicator = MemoryIndicator()
         
