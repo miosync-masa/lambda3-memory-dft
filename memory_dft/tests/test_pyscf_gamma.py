@@ -326,10 +326,9 @@ def main():
             print(f"  {r['name']:5s}  |    {r['n_elec']:2d}    | {r['E_corr']:10.6f} | {r['V']:.4f} | {r['alpha']:.4f}")
     
     print("\n✅ PySCF Integration Test Complete!")
-    print("\n💡 Next steps:")
-    print("   - ED距離フィルターでγ_localを直接計算")
-    print("   - γ_memory = γ_total - γ_local = 1.216 (検証済み)")
-    print("   - Memory kernel パラメータのフィッティング")
+    print("   See test_gamma_distance_scan.py for full γ decomposition")
+    print("   γ_memory = 0.916 (45.9% Non-Markovian)")
+    print("   \"We implemented one. てへぺろ (・ω<)\"")
 
 
 if __name__ == "__main__":
