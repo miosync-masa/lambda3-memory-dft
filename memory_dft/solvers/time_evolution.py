@@ -30,9 +30,25 @@ except ImportError:
     cp = np
     HAS_CUPY = False
 
-from .memory_kernel import CompositeMemoryKernel
-from .history_manager import HistoryManager
-from ..solvers.lanczos_memory import MemoryLanczosSolver, AdaptiveMemorySolver, lanczos_expm_multiply
+# パッケージインポート
+try:
+    from memory_dft.core.memory_kernel import CompositeMemoryKernel
+    from memory_dft.core.history_manager import HistoryManager
+    from memory_dft.solvers.lanczos_memory import MemoryLanczosSolver, AdaptiveMemorySolver, lanczos_expm_multiply
+except ImportError:
+    # 相対インポート（パッケージ内から実行時）
+    try:
+        from ..core.memory_kernel import CompositeMemoryKernel
+        from ..core.history_manager import HistoryManager
+        from .lanczos_memory import MemoryLanczosSolver, AdaptiveMemorySolver, lanczos_expm_multiply
+    except ImportError:
+        # 開発時フォールバック
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core.memory_kernel import CompositeMemoryKernel
+        from core.history_manager import HistoryManager
+        from solvers.lanczos_memory import MemoryLanczosSolver, AdaptiveMemorySolver, lanczos_expm_multiply
 
 
 @dataclass
@@ -368,9 +384,14 @@ if __name__ == "__main__":
     print("Time Evolution Engine Test")
     print("="*70)
     
-    import sys
-    sys.path.insert(0, '/home/claude/memory_dft')
-    from core.sparse_engine import SparseHamiltonianEngine
+    # インポート
+    try:
+        from memory_dft.core.sparse_engine import SparseHamiltonianEngine
+    except ImportError:
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core.sparse_engine import SparseHamiltonianEngine
     
     # 4サイト鎖
     engine = SparseHamiltonianEngine(n_sites=4, use_gpu=False, verbose=False)
