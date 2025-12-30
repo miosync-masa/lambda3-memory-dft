@@ -1,44 +1,64 @@
 """
-Repulsive Memory Kernel (パンツ由来の斥力項)
-=============================================
+Repulsive Memory Kernel for Non-Markovian Interactions
+=====================================================
 
-Physical Origin:
-  パンツのゴム弾性から着想を得た斥力の履歴依存性。
-  
-  🩲 → 伸縮 → 弾性ヒステリシス → Memory効果
+This module implements a history-dependent short-range
+repulsive interaction, where the effective repulsion
+depends not only on the instantaneous configuration
+but also on prior compression history.
 
-Physical Basis:
-  1. Pauli Exclusion Principle
-     - 電子雲の重なり → 近距離斥力
-     - V_rep ∝ 1/r^n (n ≈ 12 for LJ)
-  
-  2. Elastic Hysteresis
-     - 圧縮履歴が現在の斥力に影響
-     - ゴムの「へたり」と「回復」
-  
-  3. H-CSP Connection
-     - Θ_env_phys の圧力二面性と対応
-     - 局所圧縮 → |V|_eff 変化
+The central idea is that short-range repulsion is not
+purely instantaneous. Past compression events modify
+the present effective stiffness, leading to hysteresis
+and path dependence even when the final configuration
+is identical.
 
-Memory Kernel Form:
-  K_rep(t, t') = exp(-(t-t')/τ_rep) × [1 - exp(-(t-t')/τ_recover)]
-  
-  - τ_rep: 斥力記憶の減衰時間（圧縮の「忘却」）
-  - τ_recover: 回復時間（ゴムが元に戻る速度）
-  
-  物理的解釈:
-  - t-t' 小: 圧縮直後 → 斥力増強
-  - t-t' 中: 回復途中 → 斥力残留
-  - t-t' 大: 完全回復 → 元の斥力
+Physical Motivation
+-------------------
+1. Quantum-Mechanical Repulsion
+   - Pauli exclusion principle
+   - Overlap of electronic wavefunctions
+   - Short-range repulsion of the form:
+         V_rep(r) ∝ 1 / r^n   (n ≈ 12, Lennard-Jones type)
 
-Application:
-  - 高圧下の材料（ダイヤモンドアンビル）
-  - 衝撃圧縮（衝突、爆発）
-  - 摩擦界面（局所圧縮）
-  - 触媒表面（吸着による歪み）
+2. Elastic and Structural Hysteresis
+   - Compression history alters current response
+   - Partial recovery over finite time scales
+   - Analogous to viscoelastic relaxation
 
-Author: Masamichi Iizumi, Tamaki Iizumi
-Origin: 🩲 → 🧪 → Λ³
+3. Memory-Induced Renormalization
+   - Prior compression enhances effective repulsion
+   - Leads to history-dependent |V|_eff
+   - Stabilizes systems against repeated compression
+
+Memory Kernel Form
+------------------
+The temporal memory kernel is defined as
+
+    K_rep(Δt) = exp(-Δt / τ_rep) × [1 - exp(-Δt / τ_recover)]
+
+where:
+  - τ_rep     : decay time of compression memory
+  - τ_recover : recovery time of elastic response
+
+Physical interpretation:
+  - Δt → 0    : recently compressed, repulsion enhanced
+  - intermediate Δt : partial recovery, residual memory
+  - large Δt  : full recovery, memory vanishes
+
+Applications
+------------
+This model is relevant for systems where short-range
+repulsion and compression history play a critical role:
+
+  - High-pressure materials (diamond anvil cells)
+  - Shock and impact compression
+  - Frictional and contact interfaces
+  - Surface chemistry and adsorption-induced strain
+  - Catalytic reactions with mechanical feedback
+
+Authors:
+  Masamichi Iizumi, Tamaki Iizumi
 """
 
 import numpy as np
@@ -57,19 +77,20 @@ class CompressionEvent:
 
 class RepulsiveMemoryKernel:
     """
-    Repulsive Memory Kernel
-    
-    近距離斥力の履歴依存性をモデル化。
-    
-    Physical Model:
-      V_rep^eff(r, t) = V_rep(r) × [1 + η ∫ K(t-t') Θ(r_c - r(t')) dt']
-    
+    History-dependent repulsive memory kernel.
+
+    This kernel models the enhancement of short-range
+    repulsive interactions due to prior compression events.
+
+    Effective interaction:
+        V_rep^eff(r, t) = V_rep(r) × [1 + η ∫ K_rep(t - t') Θ(r_c - r(t')) dt']
+
     Parameters:
-      η_rep: 斥力メモリ強度 (default: 0.2)
-      τ_rep: 斥力減衰時間 (default: 3.0)
-      τ_recover: 回復時間 (default: 10.0)
-      r_critical: 臨界距離 (default: 0.8, 相対単位)
-      n_power: 斥力指数 (default: 12, LJ型)
+        η_rep       : strength of repulsive memory
+        τ_rep       : decay time of memory
+        τ_recover   : recovery time scale
+        r_critical  : distance threshold for compression
+        n_power     : repulsion exponent (n ≈ 12)
     
     Usage:
         kernel = RepulsiveMemoryKernel()
@@ -102,14 +123,14 @@ class RepulsiveMemoryKernel:
     
     def kernel_value(self, dt: float) -> float:
         """
-        Compute kernel K(Δt)
-        
-        K(Δt) = exp(-Δt/τ_rep) × [1 - exp(-Δt/τ_recover)]
-        
-        Physical meaning:
-        - First term: memory decay (forgetting compression)
-        - Second term: recovery (rubber returning)
-        - Product: net effect peaks at intermediate times
+        Temporal kernel governing repulsive memory.
+
+        K(Δt) = exp(-Δt / τ_rep) × [1 - exp(-Δt / τ_recover)]
+
+        Interpretation:
+          - exp(-Δt / τ_rep)      : forgetting of compression
+          - 1 - exp(-Δt / τ_rec) : gradual elastic recovery
+          - product              : maximal effect at intermediate times
         """
         if dt <= 0:
             return 0.0
@@ -141,12 +162,13 @@ class RepulsiveMemoryKernel:
     
     def compute_repulsion_enhancement(self, t: float, r_current: float) -> float:
         """
-        Compute repulsion enhancement from compression history
-        
-        ΔV_rep = η ∫ K(t-t') × compression_factor(t') dt'
-        
-        Returns:
-            Enhancement factor (multiply with bare repulsion)
+        Compute enhancement of repulsive interaction
+        due to compression history.
+
+        The enhancement depends on:
+          - severity of past compression
+          - temporal distance from compression
+          - current interparticle distance
         """
         if len(self.compression_history) == 0:
             return 0.0
@@ -177,9 +199,9 @@ class RepulsiveMemoryKernel:
     def compute_effective_repulsion(self, r: float, t: float, 
                                     A: float = 1.0) -> float:
         """
-        Compute effective repulsion potential
-        
-        V_rep^eff = V_rep(r) × [1 + enhancement(t)]
+        Compute effective repulsive potential including memory.
+
+        V_rep^eff(r, t) = A / r^n × [1 + memory enhancement]
         
         Args:
             r: Current distance
@@ -201,13 +223,12 @@ class RepulsiveMemoryKernel:
                                     psi: np.ndarray,
                                     r_current: float) -> float:
         """
-        Compute contribution to Λ from repulsive memory
-        
-        This affects |V|_eff in the EDR formula:
-          Λ = K / |V|_eff
-        
-        Repulsion enhancement → |V|_eff increases → Λ decreases
-        (More stable against further compression)
+        Compute contribution of repulsive memory to the
+        effective stability parameter Λ via |V|_eff.
+
+        Enhanced repulsion increases |V|_eff, thereby
+        reducing Λ and stabilizing the system against
+        further compression.
         """
         enhancement = self.compute_repulsion_enhancement(t, r_current)
         
@@ -226,7 +247,10 @@ class RepulsiveMemoryKernel:
                              r_range: np.ndarray,
                              compression_history: List[float]) -> dict:
         """
-        Generate hysteresis curve for visualization
+        Generate compression–expansion hysteresis curves.
+
+        A non-zero enclosed area directly signals
+        non-Markovian memory effects.
         
         Args:
             r_range: Array of distances
@@ -286,16 +310,19 @@ class RepulsiveMemoryKernel:
 
 class ExtendedCompositeKernel:
     """
-    Extended Composite Memory Kernel with Repulsion
-    
-    4-component kernel:
-    - Θ_field   → PowerLaw (γ ≈ 1.2)
-    - Θ_env_phys → StretchedExp (β ≈ 0.5)
-    - Θ_env_chem → Step (reaction time)
-    - Θ_repulsion → RepulsiveMemory (🩲)  ← NEW!
-    
-    H-CSP Correspondence:
-      圧力の二面性（環境 + 場）を完全に実装
+    Extended composite memory kernel including
+    repulsive hysteresis effects.
+
+    Components:
+      - Long-range field memory
+      - Structural relaxation memory
+      - Chemical (irreversible) memory
+      - Short-range repulsive memory (this module)
+
+    This construction enables simultaneous treatment of
+    non-local correlations, slow relaxation, reaction order,
+    and compression-induced hysteresis within a unified
+    Memory-DFT framework.
     """
     
     def __init__(self,
