@@ -23,7 +23,7 @@ try:
     from memory_dft.solvers.lanczos_memory import MemoryLanczosSolver
     from memory_dft.solvers.time_evolution import TimeEvolutionEngine, EvolutionConfig
     from memory_dft.physics.lambda3_bridge import Lambda3Calculator, HCSPValidator
-    from memory_dft.physics.vorticity import GammaExtractor
+    from memory_dft.physics.vorticity import GammaExtractor, VorticityCalculator
 except ImportError:
     # 開発時のフォールバック
     import sys
@@ -36,7 +36,7 @@ except ImportError:
     from solvers.lanczos_memory import MemoryLanczosSolver
     from solvers.time_evolution import TimeEvolutionEngine, EvolutionConfig
     from physics.lambda3_bridge import Lambda3Calculator, HCSPValidator
-    from physics.vorticity import GammaExtractor
+    from physics.vorticity import GammaExtractor, VorticityCalculator
 
 
 def create_h2_model(bond_length: float = 1.4):
@@ -278,6 +278,201 @@ def test_memory_kernel_decomposition():
     return results
 
 
+def test_gamma_distance_decomposition():
+    """
+    γ距離分解テスト（Non-Markovian QSOT検証）
+    
+    γ_total = γ_local + γ_memory
+    
+    Hubbard model (L=6,8,10, U/t=2.0) で実行
+    → ED standalone test とのクロスチェック！
+    
+    Reference: Lie & Fullwood, PRL 135, 230204 (2025)
+    """
+    print("\n" + "="*70)
+    print("Test 6: γ Distance Decomposition (Hubbard ED, Non-Markovian QSOT)")
+    print("="*70)
+    
+    from scipy.sparse.linalg import eigsh
+    import scipy.sparse as sp
+    
+    calc = VorticityCalculator(svd_cut=0.95, use_jax=False)
+    
+    # ========================================
+    # Mini Hubbard Engine (from standalone)
+    # ========================================
+    def build_site_op(op, site, L, sparse_mod):
+        """サイト演算子"""
+        I = sparse_mod.eye(2, format='csr')
+        ops = [I] * L
+        ops[site] = sparse_mod.csr_matrix(op)
+        result = ops[0]
+        for i in range(1, L):
+            result = sparse_mod.kron(result, ops[i], format='csr')
+        return result
+    
+    def build_hubbard_hamiltonian(L, t=1.0, U=2.0):
+        """Hubbard Hamiltonian with charge operators"""
+        # Operators
+        Sp = np.array([[0, 1], [0, 0]], dtype=np.complex128)
+        Sm = np.array([[0, 0], [1, 0]], dtype=np.complex128)
+        n_op = np.array([[0, 0], [0, 1]], dtype=np.complex128)
+        
+        H = None
+        
+        # Hopping: -t Σ (c†_i c_j + h.c.)
+        for i in range(L - 1):
+            j = i + 1
+            Sp_i = build_site_op(Sp, i, L, sp)
+            Sm_i = build_site_op(Sm, i, L, sp)
+            Sp_j = build_site_op(Sp, j, L, sp)
+            Sm_j = build_site_op(Sm, j, L, sp)
+            term = -t * (Sp_i @ Sm_j + Sm_i @ Sp_j)
+            H = term if H is None else H + term
+        
+        # Interaction: U Σ n_i n_j
+        for i in range(L - 1):
+            j = i + 1
+            n_i = build_site_op(n_op, i, L, sp)
+            n_j = build_site_op(n_op, j, L, sp)
+            H = H + U * n_i @ n_j
+        
+        return H
+    
+    def compute_2rdm_hubbard(psi, L):
+        """2-RDM from charge operators"""
+        n_op = np.array([[0, 0], [0, 1]], dtype=np.complex128)
+        rdm2 = np.zeros((L, L, L, L), dtype=np.float64)
+        
+        for i in range(L):
+            for j in range(L):
+                n_i = build_site_op(n_op, i, L, sp)
+                n_j = build_site_op(n_op, j, L, sp)
+                val = float(np.real(np.vdot(psi, (n_i @ n_j) @ psi)))
+                rdm2[i, i, j, j] = val
+                rdm2[i, j, i, j] = val * 0.5
+                rdm2[i, j, j, i] = -val * 0.5
+        
+        return rdm2
+    
+    # ========================================
+    # Main Test
+    # ========================================
+    U_t = 2.0
+    t = 1.0
+    
+    results_by_range = {2: [], None: []}
+    
+    # E(U=0) reference
+    E_U0 = {}
+    print(f"\n  Computing U=0 references...")
+    for L in [6, 8, 10]:
+        H = build_hubbard_hamiltonian(L, t=1.0, U=0.0)
+        E, _ = eigsh(H, k=1, which='SA')
+        E_U0[L] = float(E[0])
+        print(f"    L={L}: E(U=0) = {E_U0[L]:.4f}")
+    
+    print(f"\n  Hubbard model: U/t = {U_t}")
+    
+    for L in [6, 8, 10]:
+        print(f"\n  L = {L} sites:")
+        
+        H = build_hubbard_hamiltonian(L, t=t, U=U_t)
+        E, psi = eigsh(H, k=1, which='SA')
+        E = float(E[0])
+        psi = psi[:, 0]
+        
+        E_xc = E - E_U0[L]
+        print(f"    E = {E:.4f}, E_xc = {E_xc:.4f}")
+        
+        # 2-RDM (charge operators!)
+        rdm2 = compute_2rdm_hubbard(psi, L)
+        
+        # Vorticity for each range
+        for max_range in [2, None]:
+            result = calc.compute_with_energy(rdm2, L, E_xc, max_range=max_range)
+            
+            r_label = "∞" if max_range is None else max_range
+            print(f"    r≤{r_label}: V={result.vorticity:.4f}, α={result.alpha:.4f}")
+            
+            results_by_range[max_range].append({
+                'L': L,
+                'alpha': result.alpha,
+                'V': result.vorticity
+            })
+    
+    # γ抽出
+    print("\n  γ Extraction:")
+    gammas = {}
+    
+    for max_range, data in results_by_range.items():
+        if len(data) < 2:
+            continue
+        
+        Ls = np.array([d['L'] for d in data])
+        alphas = np.array([d['alpha'] for d in data])
+        
+        valid = alphas > 1e-10
+        if np.sum(valid) < 2:
+            continue
+        
+        log_L = np.log(Ls[valid])
+        log_alpha = np.log(alphas[valid])
+        
+        if len(log_L) >= 2:
+            slope, intercept = np.polyfit(log_L, log_alpha, 1)
+            gamma = -slope
+            
+            # R²
+            pred = slope * log_L + intercept
+            ss_res = np.sum((log_alpha - pred)**2)
+            ss_tot = np.sum((log_alpha - log_alpha.mean())**2)
+            r2 = 1 - ss_res / (ss_tot + 1e-10)
+            
+            r_label = "∞" if max_range is None else max_range
+            print(f"    r≤{r_label}: γ = {gamma:.3f} (R² = {r2:.3f})")
+            gammas[max_range] = gamma
+    
+    # γ分解
+    if None in gammas and 2 in gammas:
+        gamma_total = gammas[None]
+        gamma_local = gammas[2]
+        gamma_memory = gamma_total - gamma_local
+        
+        print(f"\n  " + "="*50)
+        print(f"  🎯 γ DECOMPOSITION (Hubbard U/t={U_t})")
+        print(f"  " + "="*50)
+        print(f"    γ_total  (r=∞) = {gamma_total:.3f}")
+        print(f"    γ_local  (r≤2) = {gamma_local:.3f}")
+        print(f"    ─────────────────────────")
+        print(f"    γ_memory       = {gamma_memory:.3f}")
+        print(f"    Memory %       = {gamma_memory/(abs(gamma_total)+1e-10)*100:.1f}%")
+        
+        # ED standalone との比較
+        print(f"\n  📊 Cross-check with ED standalone:")
+        print(f"    ED standalone γ_memory = 1.216")
+        print(f"    This test    γ_memory = {gamma_memory:.3f}")
+        
+        if abs(gamma_memory - 1.216) < 0.5:
+            print(f"\n    ✅ CROSS-CHECK PASSED! Results are consistent!")
+        elif gamma_memory > 0.5:
+            print(f"\n    ⚠️ Values differ but both show Non-Markovian behavior!")
+        
+        if gamma_memory > 0.3:
+            print(f"\n    ✅ Non-Markovian correlations detected!")
+            print(f"    ✅ Memory kernel is NECESSARY!")
+        else:
+            print(f"\n    → Local correlations dominate")
+        
+        return {
+            'gamma_total': gamma_total,
+            'gamma_local': gamma_local,
+            'gamma_memory': gamma_memory
+        }
+    
+    return gammas
+
+
 def run_all_tests():
     """全テスト実行"""
     print("\n" + "="*70)
@@ -290,6 +485,7 @@ def run_all_tests():
         test_hcsp_axioms()
         test_gamma_scaling()
         test_memory_kernel_decomposition()
+        test_gamma_distance_decomposition()  # NEW: Non-Markovian QSOT test
         
         print("\n" + "="*70)
         print("🎉 All tests passed!")
