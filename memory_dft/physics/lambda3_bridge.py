@@ -7,23 +7,23 @@ stability, criticality, and history-dependent behavior
 in Memory-DFT simulations.
 
 Core quantity:
-- Λ = K / |V_eff|
+  λ = K / |V_eff|
   (dimensionless stability indicator)
 
 Physical interpretation:
-- Λ < 1   : bound / stable regime
-- Λ ≈ 1   : critical regime (onset of instability)
-- Λ > 1   : unbound / unstable regime
+  - λ < 1: bound / stable regime
+  - λ ≈ 1: critical regime (onset of instability)
+  - λ > 1: unbound / unstable regime
 
 This formulation is equivalent to an energy-density ratio
 used in mechanics and materials science, extended here
 to quantum many-body dynamics with memory effects.
 
 Key features:
-- Detection of critical transitions
-- Path-dependent stability analysis
-- Environmental renormalization of effective binding
-- Quantitative diagnostics for non-Markovian dynamics
+  - Detection of critical transitions
+  - Path-dependent stability analysis
+  - Environmental renormalization of effective binding
+  - Quantitative diagnostics for non-Markovian dynamics
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
@@ -43,11 +43,11 @@ except ImportError:
 
 
 class StabilityPhase(Enum):
-    """Λに基づく安定性相"""
-    STABLE = "stable"        # Λ < 0.7
-    CAUTION = "caution"      # 0.7 ≤ Λ < 0.9
-    CRITICAL = "critical"    # 0.9 ≤ Λ < 1.0
-    UNSTABLE = "unstable"    # Λ ≥ 1.0
+    """Stability phases based on λ value."""
+    STABLE = "stable"        # λ < 0.7
+    CAUTION = "caution"      # 0.7 ≤ λ < 0.9
+    CRITICAL = "critical"    # 0.9 ≤ λ < 1.0
+    UNSTABLE = "unstable"    # λ ≥ 1.0
 
 
 @dataclass
@@ -55,36 +55,21 @@ class LambdaState:
     """
     Complete description of the instantaneous stability state.
 
-    Attributes
-    ----------
-    Lambda : float
-        Dimensionless stability parameter Λ = K / |V_eff|.
-    K : float
-        Kinetic (or destabilizing) energy contribution.
-    V_eff : float
-        Effective binding energy magnitude.
-    Lambda_dot : float
-        Time derivative of Λ, used to detect dynamic instability.
-    K_components : dict
-        Decomposition of kinetic contributions (optional).
-    V_components : dict
-        Decomposition of binding contributions (optional).
-    phase : StabilityPhase
-        Qualitative stability regime inferred from Λ.
+    Attributes:
+        Lambda: Dimensionless stability parameter λ = K / |V_eff|
+        K: Kinetic (or destabilizing) energy contribution
+        V_eff: Effective binding energy magnitude
+        Lambda_dot: Time derivative, used to detect dynamic instability
+        K_components: Decomposition of kinetic contributions
+        V_components: Decomposition of binding contributions
+        phase: Qualitative stability regime inferred from λ
     """
-    # 基本Λ
     Lambda: float
-    K: float  # 運動/破壊エネルギー密度
-    V_eff: float  # 有効結合エネルギー密度
-    
-    # 時間微分
+    K: float
+    V_eff: float
     Lambda_dot: float = 0.0
-    
-    # 成分分解
     K_components: Dict[str, float] = field(default_factory=dict)
     V_components: Dict[str, float] = field(default_factory=dict)
-    
-    # 診断
     phase: StabilityPhase = StabilityPhase.STABLE
     
     def __post_init__(self):
@@ -103,11 +88,10 @@ class LambdaState:
 
 class Lambda3Calculator:
     """
-    Stability calculator based on an energy-density ratio.
+    Stability calculator based on energy-density ratio.
 
-    The stability parameter is defined as
-
-        Λ = K / |V_eff|
+    The stability parameter is defined as:
+        λ = K / |V_eff|
 
     where:
     - K is the kinetic or destabilizing energy contribution
@@ -122,9 +106,7 @@ class Lambda3Calculator:
     def __init__(self, use_gpu: bool = True):
         self.use_gpu = use_gpu and HAS_CUPY
         self.xp = cp if self.use_gpu else np
-        
-        # 履歴（Λ̇計算用）
-        self.lambda_history: List[Tuple[float, float]] = []  # (time, Lambda)
+        self.lambda_history: List[Tuple[float, float]] = []
     
     def compute_lambda(self,
                        psi,
@@ -133,30 +115,30 @@ class Lambda3Calculator:
                        time: Optional[float] = None,
                        record: bool = True) -> LambdaState:
         """
-        Λ状態を計算
+        Compute stability parameter from wavefunction.
         
         Args:
-            psi: 状態ベクトル
-            H_kinetic: 運動エネルギー演算子
-            H_potential: ポテンシャル演算子
-            time: 時刻（Λ̇計算用）
-            record: 履歴に記録するか
+            psi: Quantum state vector
+            H_kinetic: Kinetic energy operator
+            H_potential: Potential energy operator
+            time: Current time (for derivative calculation)
+            record: Whether to record in history
+        
+        Returns:
+            LambdaState with full diagnostics
         """
         xp = self.xp
         
-        # K計算
         K_psi = H_kinetic @ psi
         K = float(xp.real(xp.vdot(psi, K_psi)))
         
-        # V計算
         V_psi = H_potential @ psi
         V = float(xp.real(xp.vdot(psi, V_psi)))
         V_eff = abs(V)
         
-        # Λ
         Lambda = abs(K) / (V_eff + 1e-10)
         
-        # Λ̇計算
+        # Time derivative
         Lambda_dot = 0.0
         if time is not None and len(self.lambda_history) > 0:
             t_prev, L_prev = self.lambda_history[-1]
@@ -164,7 +146,6 @@ class Lambda3Calculator:
             if dt > 0:
                 Lambda_dot = (Lambda - L_prev) / dt
         
-        # 履歴記録
         if record and time is not None:
             self.lambda_history.append((time, Lambda))
         
@@ -183,45 +164,40 @@ class Lambda3Calculator:
                     H_potential,
                     environment: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """
-        Compute an environment-renormalized energy-density ratio.
+        Compute environment-renormalized energy-density ratio.
     
-        This extends the bare stability parameter by including
+        Extends the bare stability parameter by including
         external conditions such as temperature, fields, and
         chemical environment.
     
-        The resulting ratio can be interpreted as a
-        generalized safety or stability indicator, analogous
-        to criteria used in materials and mechanical engineering.
+        The resulting ratio serves as a generalized stability
+        indicator, analogous to criteria used in materials
+        and mechanical engineering.
         """
         env = environment or {}
-        
-        # 基本Λ
         state = self.compute_lambda(psi, H_kinetic, H_potential, record=False)
         
-        # 環境補正
         K_total = state.K
         V_eff = state.V_eff
         
-        # 温度補正（K_th）
+        # Temperature correction (thermal kinetic energy)
         if 'T' in env:
             k_B = 8.617e-5  # eV/K
             K_th = 1.5 * k_B * env['T']
             K_total += K_th
         
-        # 電磁場補正（|V|_eff低下）
+        # Magnetic field correction (binding reduction)
         if 'B' in env:
-            beta_B = env.get('beta_B', 0.01)  # 磁場係数
+            beta_B = env.get('beta_B', 0.01)
             V_eff -= beta_B * env['B']**2
         
-        # 酸化補正（時間依存|V|低下）
+        # Oxidation correction (time-dependent degradation)
         if 'c_O2' in env and 't' in env:
             k_oxide = env.get('k_oxide', 0.001)
             V_eff -= k_oxide * env['c_O2'] * env['t']
         
-        # EDR計算
         EDR = abs(K_total) / (abs(V_eff) + 1e-10)
         
-        # 安全判定
         if EDR < 0.3:
             safety = "SAFE"
         elif EDR < 0.7:
@@ -240,15 +216,14 @@ class Lambda3Calculator:
         }
     
     def check_critical_transition(self,
-                                   lambda_trajectory: np.ndarray,
-                                   threshold: float = 1.0) -> Dict[str, Any]:
+                                  lambda_trajectory: np.ndarray,
+                                  threshold: float = 1.0) -> Dict[str, Any]:
         """
-        Detect crossings of the critical threshold Λ = 1.
+        Detect crossings of the critical threshold λ = 1.
     
-        Crossing Λ = 1 indicates a transition between
+        Crossing λ = 1 indicates a transition between
         bound and unbound regimes, corresponding to
-        instability, failure, or phase change depending
-        on the physical context.
+        instability, failure, or phase change.
         """
         crossings = []
         
@@ -256,7 +231,6 @@ class Lambda3Calculator:
             L_prev = lambda_trajectory[i-1]
             L_curr = lambda_trajectory[i]
             
-            # 上方クロス（安定→不安定）
             if L_prev < threshold and L_curr >= threshold:
                 crossings.append({
                     'index': i,
@@ -264,8 +238,6 @@ class Lambda3Calculator:
                     'lambda_before': L_prev,
                     'lambda_after': L_curr
                 })
-            
-            # 下方クロス（不安定→安定）
             elif L_prev >= threshold and L_curr < threshold:
                 crossings.append({
                     'index': i,
@@ -284,7 +256,7 @@ class Lambda3Calculator:
 
 
 class HCSPValidator:
-     """
+    """
     Diagnostic checks for dynamical consistency
     in Memory-DFT simulations.
 
@@ -296,10 +268,10 @@ class HCSPValidator:
     @staticmethod
     def check_axiom1_hierarchy(lambda_series: List[LambdaState]) -> bool:
         """
-        公理1: 制約充足の階層性
+        Check for smooth temporal evolution.
         
-        下位の出力が上位の制約となる
-        → Λの連続性として検証
+        Large jumps indicate violation of hierarchical
+        constraint propagation.
         """
         if len(lambda_series) < 2:
             return True
@@ -307,7 +279,6 @@ class HCSPValidator:
         lambdas = [s.Lambda for s in lambda_series]
         max_jump = max(abs(lambdas[i+1] - lambdas[i]) for i in range(len(lambdas)-1))
         
-        # 急激なジャンプがないこと
         return max_jump < 0.5
     
     @staticmethod
@@ -322,22 +293,20 @@ class HCSPValidator:
         L_forward = results_forward.lambdas[-1]
         L_backward = results_backward.lambdas[-1]
         
-        # 異なる最終状態
         return abs(L_forward - L_backward) > 1e-6
     
     @staticmethod
     def check_axiom3_conservation(lambda_series: List[float], 
-                                   tolerance: float = 0.1) -> Dict[str, Any]:
+                                  tolerance: float = 0.1) -> Dict[str, Any]:
         """
-        公理3: 全体保存
+        Check for global conservation.
         
-        ∮ ∇·J_Λ dΛ = 0
-        → 平均Λの保存性
+        Tests whether the average λ remains stable over time,
+        indicating conservation despite local fluctuations.
         """
         if len(lambda_series) < 10:
             return {'conserved': True, 'drift': 0}
         
-        # 前半と後半の平均比較
         half = len(lambda_series) // 2
         mean_first = np.mean(lambda_series[:half])
         mean_second = np.mean(lambda_series[half:])
@@ -356,7 +325,7 @@ class HCSPValidator:
         """
         Check for temporal self-correlation.
         
-        A significant autocorrelation indicates that
+        Significant autocorrelation indicates that
         the current state depends on its recent history,
         a hallmark of non-Markovian dynamics.
         """
@@ -370,7 +339,6 @@ class HCSPValidator:
         if var < 1e-10:
             return {'recursive': True, 'autocorr': 1.0}
         
-        # ラグ1自己相関
         autocorr = np.corrcoef(series[:-1], series[1:])[0, 1]
         
         return {
@@ -380,22 +348,22 @@ class HCSPValidator:
     
     @staticmethod
     def check_axiom5_pulsation(lambda_series: List[float],
-                                window: int = 10) -> Dict[str, Any]:
+                               window: int = 10) -> Dict[str, Any]:
         """
-        公理5: 拍動的平衡
+        Check for pulsative equilibrium.
         
-        Λ̇ ≠ 0 かつ ⟨Λ(t+Δt)⟩ ≈ Λ(t)
-        → 局所変動 + 大域安定
+        Tests for the combination of:
+        - Local variation (system is dynamic)
+        - Global stability (average is constant)
+        
+        This signature characterizes living/driven systems.
         """
         if len(lambda_series) < window * 2:
             return {'pulsation': False, 'reason': 'insufficient data'}
         
         series = np.array(lambda_series)
         
-        # 局所変動（動いている）
         local_var = np.mean(np.abs(np.diff(series[-window:])))
-        
-        # 大域安定（平均は変わらない）
         global_std = np.std(series[-window:])
         global_mean = np.mean(series[-window:])
         relative_std = global_std / (global_mean + 1e-10)
@@ -410,50 +378,12 @@ class HCSPValidator:
         }
     
     def validate_all(self, lambda_series: List[float]) -> Dict[str, Any]:
-        """全公理を検証"""
+        """Run all diagnostic checks."""
         return {
-            'axiom3_conservation': self.check_axiom3_conservation(lambda_series),
-            'axiom4_recursive': self.check_axiom4_recursive(lambda_series),
-            'axiom5_pulsation': self.check_axiom5_pulsation(lambda_series)
+            'conservation': self.check_axiom3_conservation(lambda_series),
+            'recursion': self.check_axiom4_recursive(lambda_series),
+            'pulsation': self.check_axiom5_pulsation(lambda_series)
         }
-
-
-# =============================================================================
-# Memory Kernel ↔ Environment Hierarchy Mapping
-# =============================================================================
-
-def map_kernel_to_environment():
-    """
-    Memory Kernel と H-CSP環境階層の対応関係
-    
-    | Memory kernel | H-CSP階層      | 物理的意味           |
-    |---------------|----------------|---------------------|
-    | K_field       | Θ_field        | 場的、非局所、γ~1    |
-    | K_phys        | Θ_env_phys     | 構造緩和、β~0.5     |
-    | K_chem        | Θ_env_chem     | 化学的、不可逆       |
-    """
-    return {
-        'field': {
-            'kernel': 'PowerLaw',
-            'environment': 'Θ_field',
-            'gamma': 1.0,
-            'examples': ['gravity', 'EM_field', 'radiation'],
-            'characteristic': 'non-local, scale-invariant'
-        },
-        'phys': {
-            'kernel': 'StretchedExp',
-            'environment': 'Θ_env_phys',
-            'beta': 0.5,
-            'examples': ['temperature', 'humidity', 'pressure'],
-            'characteristic': 'relaxation, controllable'
-        },
-        'chem': {
-            'kernel': 'Step',
-            'environment': 'Θ_env_chem',
-            'examples': ['oxidation', 'corrosion', 'pH'],
-            'characteristic': 'irreversible, hysteresis'
-        }
-    }
 
 
 # =============================================================================
@@ -462,10 +392,9 @@ def map_kernel_to_environment():
 
 if __name__ == "__main__":
     print("="*70)
-    print("Λ³ Theory Bridge Test")
+    print("Stability Diagnostics Test")
     print("="*70)
     
-    # インポート
     try:
         from memory_dft.core.sparse_engine import SparseHamiltonianEngine
     except ImportError:
@@ -474,60 +403,44 @@ if __name__ == "__main__":
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from core.sparse_engine import SparseHamiltonianEngine
     
-    # テスト系
     engine = SparseHamiltonianEngine(n_sites=4, use_gpu=False, verbose=False)
     geom = engine.build_chain_geometry(L=4)
     H_K, H_V = engine.build_heisenberg_hamiltonian(geom.bonds)
     
-    # ランダム状態
     psi = np.random.randn(engine.dim) + 1j * np.random.randn(engine.dim)
     psi = psi / np.linalg.norm(psi)
     
-    # Λ計算
     calc = Lambda3Calculator(use_gpu=False)
     state = calc.compute_lambda(psi, H_K, H_V, time=0.0)
     
-    print(f"\nΛ State:")
-    print(f"  Λ = {state.Lambda:.4f}")
-    print(f"  K = {state.K:.4f}")
-    print(f"  |V| = {state.V_eff:.4f}")
+    print(f"\nStability State:")
+    print(f"  λ      = {state.Lambda:.4f}")
+    print(f"  K      = {state.K:.4f}")
+    print(f"  |V|    = {state.V_eff:.4f}")
     print(f"  Phase: {state.phase.value}")
     
-    # EDR計算（環境パラメータ付き）
+    # EDR with environment
     env = {'T': 300, 'B': 0.1, 'c_O2': 0.21, 't': 100}
     edr = calc.compute_edr(psi, H_K, H_V, environment=env)
     
     print(f"\nEDR (with environment):")
-    print(f"  EDR = {edr['EDR']:.4f}")
+    print(f"  EDR    = {edr['EDR']:.4f}")
     print(f"  Safety: {edr['safety']}")
     
-    # 公理検証
+    # Diagnostic tests
     print("\n" + "="*70)
-    print("H-CSP Axiom Validation")
+    print("Dynamical Diagnostics")
     print("="*70)
     
-    # ダミーΛ系列（正弦波+ノイズ）
     t = np.linspace(0, 10, 100)
     lambda_series = 0.5 + 0.1 * np.sin(t) + 0.02 * np.random.randn(len(t))
     
     validator = HCSPValidator()
     results = validator.validate_all(list(lambda_series))
     
-    for axiom, result in results.items():
-        print(f"\n{axiom}:")
+    for test_name, result in results.items():
+        print(f"\n{test_name}:")
         for k, v in result.items():
             print(f"  {k}: {v}")
     
-    # Memory-Environment対応
-    print("\n" + "="*70)
-    print("Memory Kernel ↔ Environment Mapping")
-    print("="*70)
-    
-    mapping = map_kernel_to_environment()
-    for layer, info in mapping.items():
-        print(f"\n{layer}:")
-        print(f"  Kernel: {info['kernel']}")
-        print(f"  H-CSP: {info['environment']}")
-        print(f"  Examples: {info['examples']}")
-    
-    print("\n✅ Λ³ Theory Bridge OK!")
+    print("\n✅ Stability diagnostics OK!")
