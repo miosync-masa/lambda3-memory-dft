@@ -8,10 +8,19 @@ H-CSP環境階層に基づく3成分Memory Kernel:
 - Θ_env_chem → StepKernel         (不可逆・反応順序)
 
 理論的背景:
-  γ_total = γ_local + Σ γ_memory^(i)
+  γ_total = γ_local + γ_memory
   
-  PySCF(全体) - DMRG(局所) = Δγ ≈ 1.0
+  ED距離分解による導出:
+    γ_total (r=∞) = 2.604  ← 全相関
+    γ_local (r≤2) = 1.388  ← Markovian (Lie & Fullwood PRL 2025)
+    γ_memory      = 1.216  ← Non-Markovian extension (46.7%)
+  
   → この差分が Memory kernel の寄与
+  → DMRGは不要！ED + 距離フィルターで十分
+
+Reference:
+  Lie & Fullwood, PRL 135, 230204 (2025)
+  "Quantum States Over Time are Uniquely Represented by a CPTP Map"
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 Based on: Λ³/H-CSP Theory v2.0
@@ -68,12 +77,12 @@ class PowerLawKernel(MemoryKernelBase):
     - スケール不変
     - 長距離相関
     - 非Markov
-    - γ ≈ 1.0 (PySCF - DMRG から導出)
+    - γ ≈ 1.2 (ED距離分解から導出: γ_memory = 1.216)
     
     H-CSP対応: Θ_field (重力、電磁場、放射線)
     """
     
-    def __init__(self, gamma: float = 1.0, amplitude: float = 1.0, epsilon: float = 1.0):
+    def __init__(self, gamma: float = 1.2, amplitude: float = 1.0, epsilon: float = 1.0):
         """
         Args:
             gamma: べき指数 (default: 1.0, 実験から導出)
@@ -234,14 +243,14 @@ class CompositeMemoryKernel:
     
     def __init__(self, 
                  weights: Optional[KernelWeights] = None,
-                 gamma_field: float = 1.0,
+                 gamma_field: float = 1.216,
                  beta_phys: float = 0.5,
                  tau0_phys: float = 10.0,
                  t_react_chem: float = 5.0):
         """
         Args:
             weights: 各カーネルの重み (系依存、学習 or 推定)
-            gamma_field: Power-law 指数
+            gamma_field: Power-law 指数 (default: 1.216, ED距離分解から導出)
             beta_phys: Stretched exp 指数
             tau0_phys: 構造緩和時間
             t_react_chem: 化学反応時間
@@ -543,7 +552,7 @@ if __name__ == "__main__":
     # 統合カーネル生成
     kernel = CompositeMemoryKernel(
         weights=KernelWeights(field=0.5, phys=0.3, chem=0.2),
-        gamma_field=1.0,    # PySCF - DMRG から導出
+        gamma_field=1.216,  # ED距離分解から導出: γ_memory = 1.216
         beta_phys=0.5,
         tau0_phys=10.0,
         t_react_chem=5.0
