@@ -14,16 +14,29 @@ Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
 import numpy as np
-import sys
-sys.path.insert(0, '/home/claude/memory_dft')
 
-from core.sparse_engine import SparseHamiltonianEngine
-from core.memory_kernel import CompositeMemoryKernel, KernelWeights
-from core.history_manager import HistoryManager
-from solvers.lanczos_memory import MemoryLanczosSolver
-from solvers.time_evolution import TimeEvolutionEngine, EvolutionConfig
-from physics.lambda3_bridge import Lambda3Calculator, HCSPValidator
-from physics.vorticity import GammaExtractor
+# パッケージインポート（pip install後 or sys.path設定後）
+try:
+    from memory_dft.core.sparse_engine import SparseHamiltonianEngine
+    from memory_dft.core.memory_kernel import CompositeMemoryKernel, KernelWeights
+    from memory_dft.core.history_manager import HistoryManager
+    from memory_dft.solvers.lanczos_memory import MemoryLanczosSolver
+    from memory_dft.solvers.time_evolution import TimeEvolutionEngine, EvolutionConfig
+    from memory_dft.physics.lambda3_bridge import Lambda3Calculator, HCSPValidator
+    from memory_dft.physics.vorticity import GammaExtractor
+except ImportError:
+    # 開発時のフォールバック
+    import sys
+    import os
+    # このファイルの親ディレクトリをパスに追加
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from core.sparse_engine import SparseHamiltonianEngine
+    from core.memory_kernel import CompositeMemoryKernel, KernelWeights
+    from core.history_manager import HistoryManager
+    from solvers.lanczos_memory import MemoryLanczosSolver
+    from solvers.time_evolution import TimeEvolutionEngine, EvolutionConfig
+    from physics.lambda3_bridge import Lambda3Calculator, HCSPValidator
+    from physics.vorticity import GammaExtractor
 
 
 def create_h2_model(bond_length: float = 1.4):
