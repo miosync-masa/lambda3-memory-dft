@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-dft"
+version = "0.2.0"
+description = "History-Dependent Density Functional Theory based on H-CSP/Λ³ Theory"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Masamichi Iizumi", email = "masa@miosync.com"},
+    {name = "Tamaki Iizumi"}
+]
+keywords = [
+    "density-functional-theory",
+    "DFT",
+    "memory-kernel",
+    "non-markovian",
+    "quantum-chemistry",
+    "materials-science",
+    "H-CSP",
+    "Lambda3"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+]
+
+[project.optional-dependencies]
+gpu = ["cupy>=10.0.0"]
+pyscf = ["pyscf>=2.0.0"]
+full = [
+    "cupy>=10.0.0",
+    "pyscf>=2.0.0",
+    "matplotlib>=3.5.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/miosync-masa/lambda3-memory-dft"
+Documentation = "https://github.com/miosync-masa/lambda3-memory-dft#readme"
+Repository = "https://github.com/miosync-masa/lambda3-memory-dft.git"
+Issues = "https://github.com/miosync-masa/lambda3-memory-dft/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memory_dft*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "memory_dft/tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.mypy_cache
+    | \.pytest_cache
+    | __pycache__
+    | build
+    | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["memory_dft"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
