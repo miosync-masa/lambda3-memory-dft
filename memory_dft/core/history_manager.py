@@ -2,12 +2,12 @@
 History Manager for Memory-DFT
 ==============================
 
-履歴（過去の状態）を保持し、Λ重み付けを行う
+Manages state history and computes history-weighted quantities.
 
-H-CSP公理との対応:
-- 公理3（全体保存）: 履歴の保存と流束計算
-- 公理4（再帰生成）: Λ(t+Δt) = F(Λ(t), Λ̇(t))
-- 公理5（拍動的平衡）: 履歴を通じた非平衡維持
+Correspondence to dynamical consistency principles:
+- Conservation: History preservation and flux computation
+- Recursive generation: λ(t+Δt) = F(λ(t), λ̇(t))
+- Pulsative equilibrium: Non-equilibrium maintenance through history
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
@@ -29,24 +29,24 @@ except ImportError:
 
 @dataclass
 class StateSnapshot:
-    """状態のスナップショット"""
+    """Snapshot of a quantum state at a given time."""
     time: float
     state: Union[np.ndarray, cp.ndarray]  # |ψ⟩ or ρ
     energy: Optional[float] = None
-    lambda_density: Optional[float] = None  # Λ意味密度
+    lambda_density: Optional[float] = None  # Stability parameter density
     observables: Dict[str, float] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class HistoryManager:
     """
-    履歴管理クラス
+    History management for Memory-DFT calculations.
     
-    機能:
-    1. 状態履歴の保持（メモリ効率的）
-    2. Λ意味密度による重み付け
-    3. Memory kernel との統合
-    4. 履歴の圧縮・間引き
+    Features:
+    1. Memory-efficient state history storage
+    2. Stability-parameter weighted averaging
+    3. Integration with memory kernels
+    4. History compression and thinning
     """
     
     def __init__(self, 
@@ -55,9 +55,9 @@ class HistoryManager:
                  use_gpu: bool = True):
         """
         Args:
-            max_history: 保持する最大履歴数
-            compression_threshold: 圧縮を開始する閾値
-            use_gpu: GPU使用フラグ
+            max_history: Maximum number of snapshots to retain
+            compression_threshold: Threshold to trigger compression
+            use_gpu: Whether to use GPU acceleration
         """
         self.max_history = max_history
         self.compression_threshold = compression_threshold
@@ -66,7 +66,7 @@ class HistoryManager:
         self.history: deque = deque(maxlen=max_history)
         self.compressed_history: List[StateSnapshot] = []
         
-        # 統計情報
+        # Statistics
         self.total_snapshots = 0
         self.compression_count = 0
         
@@ -77,7 +77,7 @@ class HistoryManager:
             lambda_density: Optional[float] = None,
             observables: Optional[Dict[str, float]] = None,
             metadata: Optional[Dict[str, Any]] = None):
-        """状態を履歴に追加"""
+        """Add a state snapshot to history."""
         
         snapshot = StateSnapshot(
             time=time,
@@ -91,19 +91,19 @@ class HistoryManager:
         self.history.append(snapshot)
         self.total_snapshots += 1
         
-        # 必要に応じて圧縮
+        # Compress if needed
         if len(self.history) >= self.compression_threshold:
             self._compress_old_history()
             
     def _compress_old_history(self):
-        """古い履歴を圧縮（間引き）"""
-        # 古い半分を間引き
+        """Compress old history by thinning."""
+        # Thin out older half
         n_to_compress = len(self.history) // 2
         old_snapshots = [self.history.popleft() for _ in range(n_to_compress)]
         
-        # 重要なものだけ残す（Λ密度が高いもの）
+        # Keep only high-importance snapshots (high λ density)
         old_snapshots.sort(key=lambda s: s.lambda_density or 0, reverse=True)
-        n_keep = n_to_compress // 4  # 1/4だけ残す
+        n_keep = n_to_compress // 4  # Keep 1/4
         
         self.compressed_history.extend(old_snapshots[:n_keep])
         self.compression_count += 1
@@ -111,7 +111,7 @@ class HistoryManager:
     def get_history_states(self, 
                            n_recent: Optional[int] = None,
                            include_compressed: bool = False) -> List[StateSnapshot]:
-        """履歴状態を取得"""
+        """Retrieve history snapshots."""
         result = list(self.history)
         
         if include_compressed:
@@ -123,16 +123,16 @@ class HistoryManager:
         return result
     
     def get_history_times(self) -> np.ndarray:
-        """履歴の時刻配列を取得"""
+        """Get array of history timestamps."""
         return np.array([s.time for s in self.history])
     
     def get_lambda_weights(self) -> np.ndarray:
-        """Λ意味密度による重みを取得"""
+        """Get stability-parameter weights for history averaging."""
         lambdas = np.array([
             s.lambda_density if s.lambda_density is not None else 1.0 
             for s in self.history
         ])
-        # 正規化
+        # Normalize
         if lambdas.sum() > 0:
             lambdas = lambdas / lambdas.sum()
         return lambdas
@@ -142,14 +142,14 @@ class HistoryManager:
                                  t_current: float,
                                  observable_key: Optional[str] = None) -> float:
         """
-        Memory 積分を計算
+        Compute memory integral over history.
         
-        ∫ K(t-τ) * Λ(τ) * O(τ) dτ
+        ∫ K(t-τ) * λ(τ) * O(τ) dτ
         
         Args:
-            kernel: Memory kernel オブジェクト
-            t_current: 現在時刻
-            observable_key: 積分する物理量のキー（Noneなら状態ノルム）
+            kernel: Memory kernel object
+            t_current: Current time
+            observable_key: Key of observable to integrate (None = state norm)
         """
         if len(self.history) == 0:
             return 0.0
@@ -157,14 +157,14 @@ class HistoryManager:
         times = self.get_history_times()
         lambda_weights = self.get_lambda_weights()
         
-        # Kernel重みを取得
+        # Get kernel weights
         kernel_weights = kernel.integrate(t_current, times)
         
-        # 統合重み
+        # Combined weights
         combined_weights = kernel_weights * lambda_weights
         combined_weights = combined_weights / (combined_weights.sum() + 1e-10)
         
-        # 物理量を取得
+        # Get observable values
         if observable_key is not None:
             values = np.array([
                 s.observables.get(observable_key, 0.0) 
@@ -177,18 +177,18 @@ class HistoryManager:
                 for s in self.history
             ])
             
-        # 積分
+        # Integrate
         return float(np.dot(combined_weights, values))
     
     def compute_memory_state(self,
                               kernel,
                               t_current: float) -> Union[np.ndarray, cp.ndarray]:
         """
-        Memory項を含む状態の重ね合わせを計算
+        Compute memory-weighted superposition of past states.
         
-        |ψ_memory⟩ = Σ K(t-τ) * Λ(τ) * |ψ(τ)⟩
+        |ψ_memory⟩ = Σ K(t-τ) * λ(τ) * |ψ(τ)⟩
         
-        これが Memory-DFT の核心操作！
+        This is the core operation of Memory-DFT!
         """
         if len(self.history) == 0:
             return None
@@ -200,7 +200,7 @@ class HistoryManager:
         combined_weights = kernel_weights * lambda_weights
         combined_weights = combined_weights / (combined_weights.sum() + 1e-10)
         
-        # 状態の重ね合わせ
+        # State superposition
         states = [s.state for s in self.history]
         
         if self.use_gpu and isinstance(states[0], cp.ndarray):
@@ -215,7 +215,7 @@ class HistoryManager:
         return result
     
     def get_statistics(self) -> Dict[str, Any]:
-        """統計情報を取得"""
+        """Get history statistics."""
         return {
             'current_history_size': len(self.history),
             'compressed_history_size': len(self.compressed_history),
@@ -225,7 +225,7 @@ class HistoryManager:
         }
     
     def _estimate_memory_usage(self) -> float:
-        """メモリ使用量を推定（バイト）"""
+        """Estimate memory usage in bytes."""
         if len(self.history) == 0:
             return 0.0
         
@@ -235,7 +235,7 @@ class HistoryManager:
         return state_size * (len(self.history) + len(self.compressed_history))
     
     def clear(self):
-        """履歴をクリア"""
+        """Clear all history."""
         self.history.clear()
         self.compressed_history.clear()
         self.total_snapshots = 0
@@ -244,24 +244,24 @@ class HistoryManager:
 
 class LambdaDensityCalculator:
     """
-    Λ意味密度の計算
+    Calculator for stability parameter (energy-density ratio).
     
-    Λ(τ) = K(τ) / |V|_eff(τ)
+    λ(τ) = K(τ) / |V|_eff(τ)
     
-    H-CSP理論における意味密度を量子状態から計算
+    Computes the dimensionless stability indicator from quantum states.
     """
     
     @staticmethod
     def from_energy(kinetic: float, potential: float, epsilon: float = 1e-10) -> float:
         """
-        エネルギーからΛを計算
+        Compute stability parameter from energy values.
         
-        Λ = K / |V|_eff
+        λ = K / |V|_eff
         
-        臨界条件:
-        - Λ < 1: 安定
-        - Λ = 1: 臨界（相転移）
-        - Λ > 1: カタストロフィ
+        Critical conditions:
+        - λ < 1: Stable (bound)
+        - λ = 1: Critical (phase transition threshold)
+        - λ > 1: Unstable (catastrophe/unbinding)
         """
         return kinetic / (abs(potential) + epsilon)
     
@@ -270,9 +270,9 @@ class LambdaDensityCalculator:
                       H_kinetic,
                       H_potential) -> float:
         """
-        状態のエネルギー分散からΛを計算
+        Compute stability parameter from state energy variance.
         
-        より精密な計算。揺らぎを考慮。
+        More precise calculation accounting for fluctuations.
         """
         if isinstance(state, cp.ndarray):
             xp = cp
@@ -292,14 +292,13 @@ class LambdaDensityCalculator:
     @staticmethod
     def from_vorticity(vorticity: float, E_xc: float, N: int, epsilon: float = 1e-10) -> float:
         """
-        Vorticity から γ を抽出し、Λ相当値を計算
+        Extract γ-equivalent value from vorticity.
         
         α = E_xc / V ∝ N^(-γ)
         
-        PySCF vorticity との連携用
+        For integration with PySCF vorticity calculations.
         """
         alpha = abs(E_xc) / (vorticity + epsilon)
-        # γ相当の指標を返す
         return alpha
 
 
@@ -309,9 +308,7 @@ class LambdaDensityCalculator:
 
 class HistoryManagerGPU(HistoryManager):
     """
-    GPU最適化版 History Manager
-    
-    大規模系での高速計算用
+    GPU-optimized History Manager for large-scale calculations.
     """
     
     def __init__(self, max_history: int = 1000, state_dim: int = None):
@@ -319,14 +316,14 @@ class HistoryManagerGPU(HistoryManager):
         
         self.state_dim = state_dim
         if state_dim is not None:
-            # 事前にGPUメモリを確保
+            # Pre-allocate GPU memory
             self._state_buffer = cp.zeros((max_history, state_dim), dtype=cp.complex128)
             self._time_buffer = cp.zeros(max_history, dtype=cp.float64)
             self._lambda_buffer = cp.zeros(max_history, dtype=cp.float64)
             self._current_idx = 0
             
     def add_fast(self, time: float, state: cp.ndarray, lambda_density: float = 1.0):
-        """高速追加（事前確保バッファ使用）"""
+        """Fast addition using pre-allocated buffer."""
         if self.state_dim is None:
             raise ValueError("state_dim must be set for fast mode")
             
@@ -337,7 +334,7 @@ class HistoryManagerGPU(HistoryManager):
         self._current_idx += 1
         
     def compute_memory_state_fast(self, kernel_gpu, t_current: float) -> cp.ndarray:
-        """GPU上で高速にメモリ状態を計算"""
+        """Fast GPU computation of memory state."""
         n = min(self._current_idx, self.max_history)
         if n == 0:
             return cp.zeros(self.state_dim, dtype=cp.complex128)
@@ -346,17 +343,17 @@ class HistoryManagerGPU(HistoryManager):
         lambdas = self._lambda_buffer[:n]
         states = self._state_buffer[:n]
         
-        # Kernel重み（GPU）
+        # Kernel weights (GPU)
         kernel_weights = kernel_gpu.integrate_gpu(t_current, times)
         
-        # Λ重み
+        # Lambda weights
         lambda_weights = lambdas / (lambdas.sum() + 1e-10)
         
-        # 統合重み
+        # Combined weights
         combined = kernel_weights * lambda_weights
         combined = combined / (combined.sum() + 1e-10)
         
-        # 状態の重ね合わせ（行列演算）
+        # State superposition (matrix operation)
         # combined: (n,), states: (n, dim) → result: (dim,)
         result = cp.einsum('i,ij->j', combined, states)
         
@@ -372,15 +369,15 @@ if __name__ == "__main__":
     print("History Manager Test")
     print("="*70)
     
-    # CPU版テスト
+    # CPU version test
     manager = HistoryManager(max_history=100)
     
-    # ダミー履歴を追加
+    # Add dummy history
     for t in range(50):
         state = np.random.randn(16) + 1j * np.random.randn(16)
         state = state / np.linalg.norm(state)
         
-        lambda_val = 0.5 + 0.5 * np.sin(t / 10)  # 時間変動するΛ
+        lambda_val = 0.5 + 0.5 * np.sin(t / 10)  # Time-varying λ
         
         manager.add(
             time=float(t),
@@ -393,7 +390,7 @@ if __name__ == "__main__":
     print(f"History size: {len(manager.history)}")
     print(f"Statistics: {manager.get_statistics()}")
     
-    # Memory積分テスト
+    # Memory integral test
     from memory_kernel import CompositeMemoryKernel
     kernel = CompositeMemoryKernel()
     
@@ -403,7 +400,7 @@ if __name__ == "__main__":
     memory_state = manager.compute_memory_state(kernel, t_current=50.0)
     print(f"Memory state norm: {np.linalg.norm(memory_state):.6f}")
     
-    # GPU版テスト
+    # GPU version test
     print()
     print("="*70)
     print("GPU History Manager Test")
