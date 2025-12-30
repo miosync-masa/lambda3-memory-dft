@@ -7,7 +7,6 @@
 
 **History-Dependent Density Functional Theory based on H-CSP/Λ³ Theory**
 
-🩲 → 🧪 → Λ³ → PRL
 
 ## Key Results
 
