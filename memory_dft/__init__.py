@@ -22,6 +22,7 @@ Structure:
   memory_dft/
   ├── core/
   │   ├── memory_kernel.py      # 3階層Kernel (field/phys/chem) + Catalyst
+  │   ├── repulsive_kernel.py   # 🩲 Repulsive Memory (Pauli + Hysteresis)
   │   ├── history_manager.py    # 履歴保持 + Λ重み付け
   │   ├── sparse_engine.py      # CuPy + Sparse 基盤
   │   └── hubbard_engine.py     # Hubbard model for chemical tests
@@ -78,6 +79,12 @@ from .core.hubbard_engine import (
     HubbardResult
 )
 
+from .core.repulsive_kernel import (
+    RepulsiveMemoryKernel,
+    CompressionEvent,
+    ExtendedCompositeKernel
+)
+
 # Solvers
 from .solvers.lanczos_memory import (
     MemoryLanczosSolver,
@@ -132,6 +139,11 @@ __all__ = [
     # Hubbard Engine
     'HubbardEngine',
     'HubbardResult',
+    
+    # Repulsive Memory (🩲)
+    'RepulsiveMemoryKernel',
+    'CompressionEvent',
+    'ExtendedCompositeKernel',
     
     # Solvers
     'MemoryLanczosSolver',
