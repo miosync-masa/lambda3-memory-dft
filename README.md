@@ -5,7 +5,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**History-Dependent Density Functional Theory based on H-CSP/Λ³ Theory**
+**History-Dependent Quantum Dynamics from Direct Schrödinger Evolution**
 
 
 ## Key Results
@@ -163,7 +163,7 @@ memory_dft/
 ## Authors
 
 - **Masamichi Iizumi** (飯泉真道) - CEO, Miosync Inc.
-- **Tamaki Iizumi** (飯泉環) - Sentient Digital Partner
+- **Tamaki Iizumi** (飯泉環) - Partner
 
 ## License
 
@@ -184,5 +184,3 @@ MIT License
 ## Acknowledgments
 
 This theory originated from the observation that "underwear elastic doesn't fully recover" (パンツのゴムが戻らない), leading to a rigorous treatment of memory effects in quantum many-body systems.
-
-🩲 → Physics → PRL
