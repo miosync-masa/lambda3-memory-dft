@@ -6,7 +6,10 @@ from .memory_kernel import (
     StepKernel,
     CompositeMemoryKernel,
     CompositeMemoryKernelGPU,
-    KernelWeights
+    KernelWeights,
+    CatalystMemoryKernel,
+    CatalystEvent,
+    SimpleMemoryKernel
 )
 
 from .history_manager import (
@@ -19,4 +22,9 @@ from .history_manager import (
 from .sparse_engine import (
     SparseHamiltonianEngine,
     SystemGeometry
+)
+
+from .hubbard_engine import (
+    HubbardEngine,
+    HubbardResult
 )
