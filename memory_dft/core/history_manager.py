@@ -1,367 +1,482 @@
 """
-History Manager for Memory-DFT
-==============================
+Memory Kernel for Memory-DFT
+============================
 
-履歴（過去の状態）を保持し、Λ重み付けを行う
+Three-component Memory Kernel based on environment hierarchy:
 
-H-CSP公理との対応:
-- 公理3（全体保存）: 履歴の保存と流束計算
-- 公理4（再帰生成）: Λ(t+Δt) = F(Λ(t), Λ̇(t))
-- 公理5（拍動的平衡）: 履歴を通じた非平衡維持
+| Component | Kernel Type      | Physics                    |
+|-----------|------------------|----------------------------|
+| Field     | PowerLawKernel   | Long-range, scale-invariant|
+| Physical  | StretchedExpKernel| Structural relaxation     |
+| Chemical  | StepKernel       | Irreversible reactions     |
+
+Theoretical Background:
+  The total correlation exponent decomposes as:
+  
+    γ_total = γ_local + γ_memory
+  
+  From exact diagonalization with distance filtering:
+    γ_total (r=∞) = 2.604   ← Full correlations
+    γ_local (r≤2) = 1.388   ← Markovian sector
+    γ_memory      = 1.216   ← Non-Markovian extension (46.7%)
+  
+  This decomposition shows that nearly half of quantum correlations
+  require history-dependent treatment beyond standard DFT.
+
+Reference:
+  Lie & Fullwood, PRL 135, 230204 (2025)
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
 import numpy as np
-from typing import Optional, List, Dict, Any, Union
-from dataclasses import dataclass, field
-from collections import deque
-import time
+from abc import ABC, abstractmethod
+from typing import Optional, Union, List, Tuple
+from dataclasses import dataclass
 
 # GPU support (optional)
 try:
     import cupy as cp
     HAS_CUPY = True
 except ImportError:
-    cp = np  # Fallback to NumPy
+    cp = np
     HAS_CUPY = False
 
 
-@dataclass
-class StateSnapshot:
-    """状態のスナップショット"""
-    time: float
-    state: Union[np.ndarray, cp.ndarray]  # |ψ⟩ or ρ
-    energy: Optional[float] = None
-    lambda_density: Optional[float] = None  # Λ意味密度
-    observables: Dict[str, float] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+# =============================================================================
+# Base Kernel Class
+# =============================================================================
 
-
-class HistoryManager:
-    """
-    履歴管理クラス
+class MemoryKernelBase(ABC):
+    """Abstract base class for memory kernels."""
     
-    機能:
-    1. 状態履歴の保持（メモリ効率的）
-    2. Λ意味密度による重み付け
-    3. Memory kernel との統合
-    4. 履歴の圧縮・間引き
+    @abstractmethod
+    def __call__(self, t: float, tau: float) -> float:
+        """Compute kernel value K(t, τ)."""
+        pass
+    
+    @abstractmethod
+    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
+        """Return weight vector over entire history."""
+        pass
+    
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        pass
+
+
+# =============================================================================
+# Field Component: Power-Law Kernel
+# =============================================================================
+
+class PowerLawKernel(MemoryKernelBase):
+    """
+    Power-law Memory Kernel for long-range correlations.
+    
+    K(t-τ) = A / (t - τ + ε)^γ
+    
+    Physical characteristics:
+    - Scale-invariant decay
+    - Long-range temporal correlations  
+    - Non-Markovian dynamics
+    - γ ≈ 1.216 (derived from ED distance decomposition)
+    
+    Corresponds to field-like environmental coupling
+    (e.g., electromagnetic fields, gravitational effects).
     """
     
     def __init__(self, 
-                 max_history: int = 1000,
-                 compression_threshold: int = 500,
-                 use_gpu: bool = True):
+                 gamma: float = 1.216,
+                 amplitude: float = 1.0,
+                 epsilon: float = 0.1):
         """
         Args:
-            max_history: 保持する最大履歴数
-            compression_threshold: 圧縮を開始する閾値
-            use_gpu: GPU使用フラグ
+            gamma: Power-law exponent (default 1.216 from ED decomposition)
+            amplitude: Overall strength
+            epsilon: Short-time regularization
         """
-        self.max_history = max_history
-        self.compression_threshold = compression_threshold
-        self.use_gpu = use_gpu
-        
-        self.history: deque = deque(maxlen=max_history)
-        self.compressed_history: List[StateSnapshot] = []
-        
-        # 統計情報
-        self.total_snapshots = 0
-        self.compression_count = 0
-        
-    def add(self, 
-            time: float, 
-            state: Union[np.ndarray, cp.ndarray],
-            energy: Optional[float] = None,
-            lambda_density: Optional[float] = None,
-            observables: Optional[Dict[str, float]] = None,
-            metadata: Optional[Dict[str, Any]] = None):
-        """状態を履歴に追加"""
-        
-        snapshot = StateSnapshot(
-            time=time,
-            state=state.copy() if hasattr(state, 'copy') else state,
-            energy=energy,
-            lambda_density=lambda_density,
-            observables=observables or {},
-            metadata=metadata or {}
-        )
-        
-        self.history.append(snapshot)
-        self.total_snapshots += 1
-        
-        # 必要に応じて圧縮
-        if len(self.history) >= self.compression_threshold:
-            self._compress_old_history()
-            
-    def _compress_old_history(self):
-        """古い履歴を圧縮（間引き）"""
-        # 古い半分を間引き
-        n_to_compress = len(self.history) // 2
-        old_snapshots = [self.history.popleft() for _ in range(n_to_compress)]
-        
-        # 重要なものだけ残す（Λ密度が高いもの）
-        old_snapshots.sort(key=lambda s: s.lambda_density or 0, reverse=True)
-        n_keep = n_to_compress // 4  # 1/4だけ残す
-        
-        self.compressed_history.extend(old_snapshots[:n_keep])
-        self.compression_count += 1
-        
-    def get_history_states(self, 
-                           n_recent: Optional[int] = None,
-                           include_compressed: bool = False) -> List[StateSnapshot]:
-        """履歴状態を取得"""
-        result = list(self.history)
-        
-        if include_compressed:
-            result = self.compressed_history + result
-            
-        if n_recent is not None:
-            result = result[-n_recent:]
-            
-        return result
+        self.gamma = gamma
+        self.amplitude = amplitude
+        self.epsilon = epsilon
     
-    def get_history_times(self) -> np.ndarray:
-        """履歴の時刻配列を取得"""
-        return np.array([s.time for s in self.history])
-    
-    def get_lambda_weights(self) -> np.ndarray:
-        """Λ意味密度による重みを取得"""
-        lambdas = np.array([
-            s.lambda_density if s.lambda_density is not None else 1.0 
-            for s in self.history
-        ])
-        # 正規化
-        if lambdas.sum() > 0:
-            lambdas = lambdas / lambdas.sum()
-        return lambdas
-    
-    def compute_memory_integral(self, 
-                                 kernel,
-                                 t_current: float,
-                                 observable_key: Optional[str] = None) -> float:
-        """
-        Memory 積分を計算
-        
-        ∫ K(t-τ) * Λ(τ) * O(τ) dτ
-        
-        Args:
-            kernel: Memory kernel オブジェクト
-            t_current: 現在時刻
-            observable_key: 積分する物理量のキー（Noneなら状態ノルム）
-        """
-        if len(self.history) == 0:
+    def __call__(self, t: float, tau: float) -> float:
+        dt = t - tau
+        if dt <= 0:
             return 0.0
-            
-        times = self.get_history_times()
-        lambda_weights = self.get_lambda_weights()
-        
-        # Kernel重みを取得
-        kernel_weights = kernel.integrate(t_current, times)
-        
-        # 統合重み
-        combined_weights = kernel_weights * lambda_weights
-        combined_weights = combined_weights / (combined_weights.sum() + 1e-10)
-        
-        # 物理量を取得
-        if observable_key is not None:
-            values = np.array([
-                s.observables.get(observable_key, 0.0) 
-                for s in self.history
-            ])
-        else:
-            values = np.array([
-                float(np.linalg.norm(s.state) if isinstance(s.state, np.ndarray) 
-                      else float(cp.linalg.norm(s.state)))
-                for s in self.history
-            ])
-            
-        # 積分
-        return float(np.dot(combined_weights, values))
+        return self.amplitude / (dt + self.epsilon) ** self.gamma
     
-    def compute_memory_state(self,
-                              kernel,
-                              t_current: float) -> Union[np.ndarray, cp.ndarray]:
-        """
-        Memory項を含む状態の重ね合わせを計算
-        
-        |ψ_memory⟩ = Σ K(t-τ) * Λ(τ) * |ψ(τ)⟩
-        
-        これが Memory-DFT の核心操作！
-        """
-        if len(self.history) == 0:
-            return None
-            
-        times = self.get_history_times()
-        lambda_weights = self.get_lambda_weights()
-        kernel_weights = kernel.integrate(t_current, times)
-        
-        combined_weights = kernel_weights * lambda_weights
-        combined_weights = combined_weights / (combined_weights.sum() + 1e-10)
-        
-        # 状態の重ね合わせ
-        states = [s.state for s in self.history]
-        
-        if self.use_gpu and isinstance(states[0], cp.ndarray):
-            result = cp.zeros_like(states[0])
-            for w, s in zip(combined_weights, states):
-                result += w * s
-        else:
-            result = np.zeros_like(states[0])
-            for w, s in zip(combined_weights, states):
-                result += w * s
-                
-        return result
+    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
+        dt = t - history_times
+        mask = dt > 0
+        weights = np.zeros_like(history_times)
+        weights[mask] = self.amplitude / (dt[mask] + self.epsilon) ** self.gamma
+        return weights
     
-    def get_statistics(self) -> Dict[str, Any]:
-        """統計情報を取得"""
+    @property
+    def name(self) -> str:
+        return f"PowerLaw(γ={self.gamma:.3f})"
+
+
+# =============================================================================
+# Physical Environment: Stretched Exponential Kernel
+# =============================================================================
+
+class StretchedExpKernel(MemoryKernelBase):
+    """
+    Stretched exponential kernel for structural relaxation.
+    
+    K(t-τ) = A · exp(-(|t-τ|/τ₀)^β)
+    
+    Physical characteristics:
+    - Multi-timescale relaxation
+    - β < 1: sub-diffusive (glassy dynamics)
+    - β = 1: simple exponential (Debye relaxation)
+    - β > 1: compressed exponential (cooperative motion)
+    
+    Corresponds to physical environment effects
+    (e.g., temperature-driven relaxation, structural rearrangement).
+    """
+    
+    def __init__(self,
+                 tau0: float = 10.0,
+                 beta: float = 0.5,
+                 amplitude: float = 1.0):
+        """
+        Args:
+            tau0: Characteristic relaxation time
+            beta: Stretching exponent (0.5 typical for glasses)
+            amplitude: Overall strength
+        """
+        self.tau0 = tau0
+        self.beta = beta
+        self.amplitude = amplitude
+    
+    def __call__(self, t: float, tau: float) -> float:
+        dt = abs(t - tau)
+        if dt == 0:
+            return self.amplitude
+        return self.amplitude * np.exp(-(dt / self.tau0) ** self.beta)
+    
+    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
+        dt = np.abs(t - history_times)
+        return self.amplitude * np.exp(-(dt / self.tau0) ** self.beta)
+    
+    @property
+    def name(self) -> str:
+        return f"StretchedExp(β={self.beta:.2f}, τ₀={self.tau0:.1f})"
+
+
+# =============================================================================
+# Chemical Environment: Step Kernel
+# =============================================================================
+
+class StepKernel(MemoryKernelBase):
+    """
+    Step-function kernel for irreversible chemical processes.
+    
+    K(t-τ) = A · Θ(t - τ - t_react)
+    
+    Physical characteristics:
+    - Sharp onset at reaction time
+    - Irreversible state change
+    - No decay (permanent memory)
+    
+    Corresponds to chemical environment effects
+    (e.g., oxidation, corrosion, phase transitions).
+    """
+    
+    def __init__(self,
+                 t_react: float = 5.0,
+                 amplitude: float = 1.0):
+        """
+        Args:
+            t_react: Reaction/activation time
+            amplitude: Post-reaction memory strength
+        """
+        self.t_react = t_react
+        self.amplitude = amplitude
+    
+    def __call__(self, t: float, tau: float) -> float:
+        if t - tau >= self.t_react:
+            return self.amplitude
+        return 0.0
+    
+    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
+        mask = (t - history_times) >= self.t_react
+        weights = np.zeros_like(history_times)
+        weights[mask] = self.amplitude
+        return weights
+    
+    @property
+    def name(self) -> str:
+        return f"Step(t_react={self.t_react:.1f})"
+
+
+# =============================================================================
+# Kernel Composition Weights
+# =============================================================================
+
+@dataclass
+class KernelWeights:
+    """
+    Weights for combining memory kernel components.
+    
+    The composite kernel is:
+      K_total = w_field·K_field + w_phys·K_phys + w_chem·K_chem
+    
+    Physical interpretation:
+    - field: Long-range field effects (EM, gravitational)
+    - phys: Local physical environment (T, P, humidity)
+    - chem: Chemical environment (O₂, pH, corrosion)
+    """
+    field: float = 0.4
+    phys: float = 0.4
+    chem: float = 0.2
+    
+    def __post_init__(self):
+        total = self.field + self.phys + self.chem
+        if abs(total - 1.0) > 1e-6:
+            self.field /= total
+            self.phys /= total
+            self.chem /= total
+    
+    def as_tuple(self) -> tuple:
+        return (self.field, self.phys, self.chem)
+
+
+# =============================================================================
+# Composite Memory Kernel
+# =============================================================================
+
+class CompositeMemoryKernel:
+    """
+    Three-component composite memory kernel.
+    
+    Combines field, physical, and chemical memory effects
+    with separate characteristic parameters for each.
+    
+    K_total(t,τ) = Σᵢ wᵢ · Kᵢ(t,τ)
+    
+    This decomposition reflects the hierarchical structure
+    of environmental influences on quantum dynamics.
+    """
+    
+    def __init__(self,
+                 weights: Optional[KernelWeights] = None,
+                 gamma_field: float = 1.216,
+                 beta_phys: float = 0.5,
+                 tau0_phys: float = 10.0,
+                 t_react_chem: float = 5.0):
+        self.weights = weights or KernelWeights()
+        
+        self.kernel_field = PowerLawKernel(gamma=gamma_field)
+        self.kernel_phys = StretchedExpKernel(tau0=tau0_phys, beta=beta_phys)
+        self.kernel_chem = StepKernel(t_react=t_react_chem)
+    
+    def __call__(self, t: float, tau: float) -> float:
+        w = self.weights
+        return (w.field * self.kernel_field(t, tau) +
+                w.phys * self.kernel_phys(t, tau) +
+                w.chem * self.kernel_chem(t, tau))
+    
+    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
+        w = self.weights
+        return (w.field * self.kernel_field.integrate(t, history_times) +
+                w.phys * self.kernel_phys.integrate(t, history_times) +
+                w.chem * self.kernel_chem.integrate(t, history_times))
+    
+    def decompose(self, t: float, history_times: np.ndarray) -> dict:
         return {
-            'current_history_size': len(self.history),
-            'compressed_history_size': len(self.compressed_history),
-            'total_snapshots': self.total_snapshots,
-            'compression_count': self.compression_count,
-            'memory_usage_mb': self._estimate_memory_usage() / 1e6
+            'field': self.kernel_field.integrate(t, history_times),
+            'phys': self.kernel_phys.integrate(t, history_times),
+            'chem': self.kernel_chem.integrate(t, history_times),
+            'total': self.integrate(t, history_times),
+            'weights': self.weights.as_tuple()
         }
     
-    def _estimate_memory_usage(self) -> float:
-        """メモリ使用量を推定（バイト）"""
-        if len(self.history) == 0:
+    def __repr__(self) -> str:
+        return (
+            f"CompositeMemoryKernel(\n"
+            f"  weights: field={self.weights.field:.2f}, "
+            f"phys={self.weights.phys:.2f}, chem={self.weights.chem:.2f}\n"
+            f"  field:  {self.kernel_field.name}\n"
+            f"  phys:   {self.kernel_phys.name}\n"
+            f"  chem:   {self.kernel_chem.name}\n"
+            f")"
+        )
+
+
+# =============================================================================
+# GPU-Accelerated Composite Kernel
+# =============================================================================
+
+class CompositeMemoryKernelGPU:
+    """GPU-accelerated composite memory kernel using CuPy."""
+    
+    def __init__(self,
+                 weights: Optional[KernelWeights] = None,
+                 gamma_field: float = 1.216,
+                 beta_phys: float = 0.5,
+                 tau0_phys: float = 10.0,
+                 t_react_chem: float = 5.0):
+        self.weights = weights or KernelWeights()
+        self.gamma = gamma_field
+        self.beta = beta_phys
+        self.tau0 = tau0_phys
+        self.t_react = t_react_chem
+        self.epsilon = 0.1
+        self.xp = cp if HAS_CUPY else np
+    
+    def integrate(self, t: float, history_times) -> np.ndarray:
+        xp = self.xp
+        history_times = xp.asarray(history_times)
+        dt = t - history_times
+        
+        mask_field = dt > 0
+        K_field = xp.zeros_like(dt)
+        K_field[mask_field] = 1.0 / (dt[mask_field] + self.epsilon) ** self.gamma
+        
+        K_phys = xp.exp(-(xp.abs(dt) / self.tau0) ** self.beta)
+        K_chem = xp.where(dt >= self.t_react, 1.0, 0.0)
+        
+        w = self.weights
+        total = w.field * K_field + w.phys * K_phys + w.chem * K_chem
+        
+        if HAS_CUPY and isinstance(total, cp.ndarray):
+            return cp.asnumpy(total)
+        return total
+
+
+# =============================================================================
+# Simple Memory Kernel (Standalone Use)
+# =============================================================================
+
+class SimpleMemoryKernel:
+    """
+    Simplified memory kernel for standalone tests.
+    
+    K(t, t') = η · exp(-(t-t')/τ) · (1 + γ·(t-t'))
+    
+    Combines exponential decay with linear growth,
+    providing a minimal model of history-dependent effects.
+    """
+    
+    def __init__(self, eta: float = 0.3, tau: float = 5.0, gamma: float = 0.5):
+        self.eta = eta
+        self.tau = tau
+        self.gamma = gamma
+        self.state_history: List[Tuple[float, float, np.ndarray]] = []
+    
+    def add_state(self, t: float, lambda_val: float, psi: np.ndarray):
+        self.state_history.append((t, lambda_val, psi.copy()))
+        if len(self.state_history) > 100:
+            self.state_history = self.state_history[-100:]
+    
+    def compute_memory_contribution(self, t: float, psi: np.ndarray) -> float:
+        if len(self.state_history) == 0:
             return 0.0
         
-        sample_state = self.history[0].state
-        state_size = sample_state.nbytes if hasattr(sample_state, 'nbytes') else 0
+        contribution = 0.0
+        for t_hist, lambda_hist, psi_hist in self.state_history:
+            dt = t - t_hist
+            if dt <= 0:
+                continue
+            K = self.eta * np.exp(-dt / self.tau) * (1 + self.gamma * dt)
+            overlap = abs(np.vdot(psi, psi_hist)) ** 2
+            contribution += K * lambda_hist * overlap
         
-        return state_size * (len(self.history) + len(self.compressed_history))
+        return contribution
     
     def clear(self):
-        """履歴をクリア"""
-        self.history.clear()
-        self.compressed_history.clear()
-        self.total_snapshots = 0
-        self.compression_count = 0
-
-
-class LambdaDensityCalculator:
-    """
-    Λ意味密度の計算
-    
-    Λ(τ) = K(τ) / |V|_eff(τ)
-    
-    H-CSP理論における意味密度を量子状態から計算
-    """
-    
-    @staticmethod
-    def from_energy(kinetic: float, potential: float, epsilon: float = 1e-10) -> float:
-        """
-        エネルギーからΛを計算
-        
-        Λ = K / |V|_eff
-        
-        臨界条件:
-        - Λ < 1: 安定
-        - Λ = 1: 臨界（相転移）
-        - Λ > 1: カタストロフィ
-        """
-        return kinetic / (abs(potential) + epsilon)
-    
-    @staticmethod
-    def from_variance(state: Union[np.ndarray, cp.ndarray],
-                      H_kinetic,
-                      H_potential) -> float:
-        """
-        状態のエネルギー分散からΛを計算
-        
-        より精密な計算。揺らぎを考慮。
-        """
-        if isinstance(state, cp.ndarray):
-            xp = cp
-        else:
-            xp = np
-            
-        # ⟨K⟩
-        K_psi = H_kinetic @ state
-        K_mean = float(xp.real(xp.vdot(state, K_psi)))
-        
-        # ⟨V⟩
-        V_psi = H_potential @ state
-        V_mean = float(xp.real(xp.vdot(state, V_psi)))
-        
-        return K_mean / (abs(V_mean) + 1e-10)
-    
-    @staticmethod
-    def from_vorticity(vorticity: float, E_xc: float, N: int, epsilon: float = 1e-10) -> float:
-        """
-        Vorticity から γ を抽出し、Λ相当値を計算
-        
-        α = E_xc / V ∝ N^(-γ)
-        
-        PySCF vorticity との連携用
-        """
-        alpha = abs(E_xc) / (vorticity + epsilon)
-        # γ相当の指標を返す
-        return alpha
+        self.state_history = []
 
 
 # =============================================================================
-# GPU-optimized History Manager
+# Catalyst Memory Kernel
 # =============================================================================
 
-class HistoryManagerGPU(HistoryManager):
-    """
-    GPU最適化版 History Manager
-    
-    大規模系での高速計算用
-    """
-    
-    def __init__(self, max_history: int = 1000, state_dim: int = None):
-        super().__init__(max_history=max_history, use_gpu=True)
-        
-        self.state_dim = state_dim
-        if state_dim is not None:
-            # 事前にGPUメモリを確保
-            self._state_buffer = cp.zeros((max_history, state_dim), dtype=cp.complex128)
-            self._time_buffer = cp.zeros(max_history, dtype=cp.float64)
-            self._lambda_buffer = cp.zeros(max_history, dtype=cp.float64)
-            self._current_idx = 0
-            
-    def add_fast(self, time: float, state: cp.ndarray, lambda_density: float = 1.0):
-        """高速追加（事前確保バッファ使用）"""
-        if self.state_dim is None:
-            raise ValueError("state_dim must be set for fast mode")
-            
-        idx = self._current_idx % self.max_history
-        self._state_buffer[idx] = state
-        self._time_buffer[idx] = time
-        self._lambda_buffer[idx] = lambda_density
-        self._current_idx += 1
-        
-    def compute_memory_state_fast(self, kernel_gpu, t_current: float) -> cp.ndarray:
-        """GPU上で高速にメモリ状態を計算"""
-        n = min(self._current_idx, self.max_history)
-        if n == 0:
-            return cp.zeros(self.state_dim, dtype=cp.complex128)
-            
-        times = self._time_buffer[:n]
-        lambdas = self._lambda_buffer[:n]
-        states = self._state_buffer[:n]
-        
-        # Kernel重み（GPU）
-        kernel_weights = kernel_gpu.integrate_gpu(t_current, times)
-        
-        # Λ重み
-        lambda_weights = lambdas / (lambdas.sum() + 1e-10)
-        
-        # 統合重み
-        combined = kernel_weights * lambda_weights
-        combined = combined / (combined.sum() + 1e-10)
-        
-        # 状態の重ね合わせ（行列演算）
-        # combined: (n,), states: (n, dim) → result: (dim,)
-        result = cp.einsum('i,ij->j', combined, states)
-        
-        return result
+@dataclass
+class CatalystEvent:
+    """Record of a catalytic event."""
+    event_type: str   # 'adsorption' or 'reaction'
+    time: float
+    site: int
+    strength: float
 
+
+class CatalystMemoryKernel:
+    """
+    Memory kernel specialized for catalytic processes.
+    
+    Tracks the order of adsorption and reaction events,
+    capturing the non-commutativity of reaction pathways:
+    
+      Adsorption → Reaction ≠ Reaction → Adsorption
+    
+    This path-dependence is crucial for heterogeneous catalysis.
+    """
+    
+    def __init__(self, eta: float = 0.3, tau_ads: float = 3.0, tau_react: float = 5.0):
+        self.eta = eta
+        self.tau_ads = tau_ads
+        self.tau_react = tau_react
+        self.events: List[CatalystEvent] = []
+        self.state_history: List[Tuple[float, float, np.ndarray]] = []
+    
+    def add_event(self, event: CatalystEvent):
+        self.events.append(event)
+    
+    def add_state(self, t: float, lambda_val: float, psi: np.ndarray):
+        self.state_history.append((t, lambda_val, psi.copy()))
+        if len(self.state_history) > 100:
+            self.state_history = self.state_history[-100:]
+    
+    def compute_memory_contribution(self, t: float, psi: np.ndarray) -> float:
+        if len(self.events) == 0 and len(self.state_history) == 0:
+            return 0.0
+        
+        contribution = 0.0
+        
+        for event in self.events:
+            dt = t - event.time
+            if dt <= 0:
+                continue
+            tau = self.tau_ads if event.event_type == 'adsorption' else self.tau_react
+            K = self.eta * np.exp(-dt / tau) * event.strength
+            contribution += K
+        
+        order_factor = self._compute_order_factor()
+        contribution *= order_factor
+        
+        for t_hist, lambda_hist, psi_hist in self.state_history[-10:]:
+            dt = t - t_hist
+            if dt > 0:
+                overlap = abs(np.vdot(psi, psi_hist)) ** 2
+                contribution += 0.1 * self.eta * np.exp(-dt / self.tau_react) * overlap * lambda_hist
+        
+        return contribution
+    
+    def _compute_order_factor(self) -> float:
+        """Non-commutative order factor for reaction pathways."""
+        if len(self.events) < 2:
+            return 1.0
+        
+        factor = 1.0
+        for i in range(1, len(self.events)):
+            prev_type = self.events[i-1].event_type
+            curr_type = self.events[i].event_type
+            
+            if prev_type == 'adsorption' and curr_type == 'reaction':
+                factor *= 1.5  # Activation
+            elif prev_type == 'reaction' and curr_type == 'adsorption':
+                factor *= 0.7  # Passivation
+        
+        return factor
+    
+    def clear(self):
+        self.events = []
+        self.state_history = []
 
 # =============================================================================
 # Test
