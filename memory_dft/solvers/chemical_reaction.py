@@ -692,3 +692,61 @@ if __name__ == "__main__":
     print(f"    Different reaction paths → Different quantum outcomes")
     print(f"    This CANNOT be captured by standard DFT!")
     print(f"    Memory-DFT is NECESSARY for history-dependent chemistry!")
+    
+    # =================================================================
+    # Generate PRL Figures
+    # =================================================================
+    print("\n" + "#"*70)
+    print("# GENERATING PRL FIGURES")
+    print("#"*70)
+    
+    try:
+        from memory_dft.visualization.prl_figures import (
+            fig2_path_evolution, 
+            fig3_memory_comparison
+        )
+        HAVE_VIS = True
+    except ImportError:
+        try:
+            import sys
+            sys.path.insert(0, '/home/claude')
+            from memory_dft.visualization.prl_figures import (
+                fig2_path_evolution,
+                fig3_memory_comparison
+            )
+            HAVE_VIS = True
+        except ImportError:
+            HAVE_VIS = False
+            print("⚠️ Visualization module not available")
+    
+    if HAVE_VIS:
+        import os
+        output_dir = './prl_figures'
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Fig. 2: Path Evolution (main figure)
+        print("\n📊 Generating Fig. 2: Path-Dependent λ Evolution...")
+        fig2_path_evolution(
+            np.array(res1.times), np.array(res1.lambdas),
+            np.array(res2.times), np.array(res2.lambdas),
+            path1_name=res1.path_name,
+            path2_name=res2.path_name,
+            event_times=[(2.0, '1st adsorption'), (5.0, '2nd adsorption')],
+            save_path=os.path.join(output_dir, 'fig2_path_evolution.png'),
+            show=False
+        )
+        
+        # Fig. 3: DFT vs DSE Comparison
+        print("\n📊 Generating Fig. 3: Memory Comparison...")
+        fig3_memory_comparison(
+            ['Test 1', 'Test 2'],
+            [0, 0],  # DFT always gives 0
+            [comp1['delta_lambda'], comp2['delta_lambda']],
+            test_labels=['Adsorption\norder', 'Reaction\nsequence'],
+            save_path=os.path.join(output_dir, 'fig3_memory_comparison.png'),
+            show=False
+        )
+        
+        print(f"\n✅ Figures saved to {output_dir}/")
+        print(f"   - fig2_path_evolution.png")
+        print(f"   - fig3_memory_comparison.png")
