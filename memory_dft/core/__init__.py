@@ -28,3 +28,9 @@ from .hubbard_engine import (
     HubbardEngine,
     HubbardResult
 )
+
+from .repulsive_kernel import (
+    RepulsiveMemoryKernel,
+    CompressionEvent,
+    ExtendedCompositeKernel
+)
