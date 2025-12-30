@@ -170,14 +170,14 @@ def fig2_path_evolution(times1, lambdas1, times2, lambdas2,
     # Path 1: A→B
     ax_schem.text(1, 8.5, 'Path A→B:', fontsize=9, fontweight='bold', 
                   color=COLORS['path1'])
-    ax_schem.text(1, 7.5, '① A adsorbs', fontsize=8, color=COLORS['path1'])
-    ax_schem.text(1, 6.5, '② B adsorbs', fontsize=8, color=COLORS['path1'])
+    ax_schem.text(1, 7.5, '(1) A adsorbs', fontsize=8, color=COLORS['path1'])
+    ax_schem.text(1, 6.5, '(2) B adsorbs', fontsize=8, color=COLORS['path1'])
     
     # Path 2: B→A  
     ax_schem.text(1, 4.5, 'Path B→A:', fontsize=9, fontweight='bold',
                   color=COLORS['path2'])
-    ax_schem.text(1, 3.5, '① B adsorbs', fontsize=8, color=COLORS['path2'])
-    ax_schem.text(1, 2.5, '② A adsorbs', fontsize=8, color=COLORS['path2'])
+    ax_schem.text(1, 3.5, '(1) B adsorbs', fontsize=8, color=COLORS['path2'])
+    ax_schem.text(1, 2.5, '(2) A adsorbs', fontsize=8, color=COLORS['path2'])
     
     # Arrow to "Same final state"
     ax_schem.annotate('', xy=(8, 5.5), xytext=(5, 7.5),
