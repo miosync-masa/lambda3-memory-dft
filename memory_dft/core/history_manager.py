@@ -13,11 +13,18 @@ Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
 import numpy as np
-import cupy as cp
 from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass, field
 from collections import deque
 import time
+
+# GPU support (optional)
+try:
+    import cupy as cp
+    HAS_CUPY = True
+except ImportError:
+    cp = np  # Fallback to NumPy
+    HAS_CUPY = False
 
 
 @dataclass
