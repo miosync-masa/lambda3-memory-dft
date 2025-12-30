@@ -20,9 +20,10 @@ Theoretical Background:
   require history-dependent treatment.
 
 Key Results:
-  - Path dependence: 22.84x amplification
-  - Catalyst history: Standard QM |Δλ|=0, Memory-DFT |Δλ|=51.07
-  - Compression hysteresis: validated
+  - γ_memory = 1.216 (46.7% of correlations are non-Markovian)
+  - Path dependence: ΔΛ = 1.59 (adsorption order)
+  - Reaction sequence: ΔΛ = 2.18
+  - Standard DFT cannot distinguish these paths (ΔΛ ≡ 0)
 
 Structure:
   memory_dft/
@@ -40,6 +41,8 @@ Structure:
   ├── physics/
   │   ├── lambda3_bridge.py     # Stability diagnostics
   │   └── vorticity.py          # γ decomposition
+  ├── visualization/
+  │   └── prl_figures.py        # PRL publication figures
   └── tests/
       ├── test_chemical.py      # Chemical tests (A/B/C/D)
       └── test_repulsive.py     # Repulsive tests (E1/E2/E3)
@@ -133,6 +136,15 @@ from .physics.vorticity import (
     MemoryKernelFromGamma
 )
 
+# Visualization
+from .visualization.prl_figures import (
+    fig1_gamma_decomposition,
+    fig2_path_evolution,
+    fig3_memory_comparison,
+    generate_all_prl_figures,
+    COLORS as PRL_COLORS
+)
+
 __all__ = [
     # Version
     '__version__',
@@ -199,4 +211,11 @@ __all__ = [
     'VorticityResult',
     'GammaExtractor',
     'MemoryKernelFromGamma',
+    
+    # Visualization
+    'fig1_gamma_decomposition',
+    'fig2_path_evolution',
+    'fig3_memory_comparison',
+    'generate_all_prl_figures',
+    'PRL_COLORS',
 ]
