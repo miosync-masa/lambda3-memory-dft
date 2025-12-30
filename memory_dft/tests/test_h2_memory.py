@@ -160,7 +160,7 @@ def test_hcsp_axioms():
     engine, H_K, H_V = create_h2_model()
     
     # 初期状態
-    psi0 = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.complex128)
+    psi0 = np.array([0, 1, -1, 0], dtype=np.complex128)
     psi0 = psi0 / np.linalg.norm(psi0)
     
     config = EvolutionConfig(
