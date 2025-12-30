@@ -1,29 +1,44 @@
 """
-Memory Kernel for Memory-DFT
-============================
+Memory Kernels for Non-Markovian Density Functional Theory
+=========================================================
 
-H-CSP環境階層に基づく3成分Memory Kernel:
-- Θ_field   → PowerLawKernel    (γ ~ 1.0, 場的・非局所)
-- Θ_env_phys → StretchedExpKernel (β ~ 0.5, 構造緩和)
-- Θ_env_chem → StepKernel         (不可逆・反応順序)
+This module implements a physically motivated decomposition
+of memory kernels for Memory-DFT simulations.
 
-理論的背景:
-  γ_total = γ_local + γ_memory
-  
-  ED距離分解による導出:
-    γ_total (r=∞) = 2.604  ← 全相関
-    γ_local (r≤2) = 1.388  ← Markovian (Lie & Fullwood PRL 2025)
-    γ_memory      = 1.216  ← Non-Markovian extension (46.7%)
-  
-  → この差分が Memory kernel の寄与
-  → DMRGは不要！ED + 距離フィルターで十分
+The total memory effect is represented as a weighted sum of
+three kernel components with distinct physical origins:
+
+  - Long-range field-induced memory (power-law kernel)
+  - Structural relaxation memory (stretched exponential kernel)
+  - Irreversible chemical memory (step / hysteretic kernel)
+
+Theoretical motivation
+----------------------
+The total correlation exponent is decomposed as
+
+    γ_total = γ_local + γ_memory
+
+where:
+  - γ_local  captures short-range, effectively Markovian correlations
+  - γ_memory quantifies genuinely non-Markovian contributions
+
+This decomposition is obtained from an exact-diagonalization
+distance-resolved analysis, without relying on DMRG.
+
+Representative values (Hubbard model, U/t = 2):
+  - γ_total  (all distances)      ≈ 2.604
+  - γ_local  (short-range only)   ≈ 1.388
+  - γ_memory (difference)         ≈ 1.216  (~47%)
+
+The non-Markovian contribution γ_memory directly determines
+the functional form and strength of the memory kernel.
 
 Reference:
-  Lie & Fullwood, PRL 135, 230204 (2025)
-  "Quantum States Over Time are Uniquely Represented by a CPTP Map"
+  S. H. Lie and J. Fullwood,
+  Phys. Rev. Lett. 135, 230204 (2025)
 
-Author: Masamichi Iizumi, Tamaki Iizumi
-Based on: Λ³/H-CSP Theory v2.0
+Authors:
+  Masamichi Iizumi, Tamaki Iizumi
 """
 
 import numpy as np
@@ -45,7 +60,12 @@ except ImportError:
 # =============================================================================
 
 class MemoryKernelBase(ABC):
-    """Memory Kernel の抽象基底クラス"""
+    """
+    Abstract base class for temporal memory kernels.
+
+    A memory kernel K(t, τ) assigns a weight to past states
+    at time τ when evaluating the state at time t.
+    """
     
     @abstractmethod
     def __call__(self, t: float, tau: float) -> float:
@@ -54,7 +74,7 @@ class MemoryKernelBase(ABC):
     
     @abstractmethod
     def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
-        """履歴全体に対する重みベクトルを返す"""
+        """Returns the weight vector for the entire history."""
         pass
     
     @property
@@ -69,23 +89,29 @@ class MemoryKernelBase(ABC):
 
 class PowerLawKernel(MemoryKernelBase):
     """
-    Power-law Memory Kernel
-    
-    K(t-τ) = A / (t - τ + ε)^γ
-    
-    特徴:
-    - スケール不変
-    - 長距離相関
-    - 非Markov
-    - γ ≈ 1.2 (ED距離分解から導出: γ_memory = 1.216)
-    
-    H-CSP対応: Θ_field (重力、電磁場、放射線)
+    Power-law memory kernel.
+
+    K(t - τ) = A / (t - τ + ε)^γ
+
+    Physical characteristics:
+    - Scale-invariant temporal correlations
+    - Long-range memory
+    - Strongly non-Markovian behavior
+
+    The exponent γ is determined directly from
+    distance-resolved exact-diagonalization data
+    (γ ≈ 1.2 in the present implementation).
+
+    Typical physical origins:
+    - Long-range fields
+    - Collective electronic correlations
+    - Radiative or electromagnetic environments
     """
     
     def __init__(self, gamma: float = 1.2, amplitude: float = 1.0, epsilon: float = 1.0):
         """
         Args:
-            gamma: べき指数 (default: 1.0, 実験から導出)
+            gamma: べき指数 (default: 1.2, 実験から導出)
             amplitude: 振幅係数
             epsilon: 正則化パラメータ (t=τ での発散回避)
         """
@@ -117,17 +143,19 @@ class PowerLawKernel(MemoryKernelBase):
 
 class StretchedExpKernel(MemoryKernelBase):
     """
-    Stretched Exponential Memory Kernel
-    
-    K(t-τ) = A * exp(-(（t-τ)/τ₀)^β)
-    
-    特徴:
-    - 緩和現象
-    - 時定数分布
-    - 温度・歪み依存
-    - 半Markov的
-    
-    H-CSP対応: Θ_env_phys (温度、湿度、外圧)
+    Stretched exponential memory kernel.
+
+    K(t - τ) = A * exp[-((t - τ) / τ₀)^β]
+
+    Physical characteristics:
+    - Distributed relaxation times
+    - Sub-exponential decay (0 < β < 1)
+    - Intermediate between Markovian and fully non-Markovian dynamics
+
+    Typical physical origins:
+    - Structural relaxation
+    - Thermal or mechanical environments
+    - Slowly evolving degrees of freedom
     """
     
     def __init__(self, beta: float = 0.5, tau0: float = 10.0, amplitude: float = 1.0):
@@ -166,17 +194,20 @@ class StretchedExpKernel(MemoryKernelBase):
 
 class StepKernel(MemoryKernelBase):
     """
-    Step/Piecewise Memory Kernel
-    
-    K(t-τ) = A * Θ(t - τ - t_react)  (ヘヴィサイド関数)
-    
-    特徴:
-    - 不可逆
-    - 反応順序依存
-    - ヒステリシス
-    - 完全非可換
-    
-    H-CSP対応: Θ_env_chem (酸化、腐食、pH変化)
+    Step-like (hysteretic) memory kernel.
+
+    K(t - τ) = A * Θ(t - τ - t_react)
+
+    Physical characteristics:
+    - Irreversible memory
+    - Strong path dependence
+    - Temporal hysteresis
+    - Non-commutative ordering effects
+
+    Typical physical origins:
+    - Chemical reactions
+    - Surface modification
+    - Oxidation, corrosion, or bond formation
     """
     
     def __init__(self, reaction_time: float = 5.0, amplitude: float = 1.0, 
@@ -216,7 +247,14 @@ class StepKernel(MemoryKernelBase):
 
 @dataclass
 class KernelWeights:
-    """H-CSP環境階層に対応する重み"""
+    """
+    Relative weights of different physical memory channels.
+
+    The weights reflect the relative importance of:
+      - long-range field effects
+      - structural relaxation
+      - chemical irreversibility
+    """
     field: float = 0.4    # Θ_field (電子的・場的)
     phys: float = 0.3     # Θ_env_phys (構造的)
     chem: float = 0.3     # Θ_env_chem (化学的)
@@ -231,14 +269,17 @@ class KernelWeights:
 
 class CompositeMemoryKernel:
     """
-    統合 Memory Kernel
-    
-    K(t-τ) = w_field * K_field + w_phys * K_phys + w_chem * K_chem
-    
-    H-CSP環境階層:
-    - Θ = Θ_field × Θ_env_phys × Θ_env_chem
-    
-    これが Memory-DFT の核心！
+    Composite memory kernel.
+
+    The total kernel is constructed as
+
+        K(t - τ) = w_field * K_field
+                 + w_phys  * K_phys
+                 + w_chem  * K_chem
+
+    This additive structure allows independent control of
+    distinct physical sources of non-Markovianity and enables
+    systematic analysis of path-dependent quantum dynamics.
     """
     
     def __init__(self, 
@@ -258,7 +299,7 @@ class CompositeMemoryKernel:
         self.weights = weights or KernelWeights()
         self.weights.normalize()
         
-        # 3つのカーネル (H-CSP環境階層)
+        # 3つのカーネル
         self.K_field = PowerLawKernel(gamma=gamma_field)
         self.K_phys = StretchedExpKernel(beta=beta_phys, tau0=tau0_phys)
         self.K_chem = StepKernel(reaction_time=t_react_chem)
@@ -316,9 +357,10 @@ class CompositeMemoryKernel:
 
 class CompositeMemoryKernelGPU:
     """
-    GPU加速版 Memory Kernel
-    
-    大規模系での高速計算用
+    GPU-accelerated implementation of the composite memory kernel.
+
+    Designed for large-scale simulations where long history
+    windows and fine time resolution are required.
     """
     
     def __init__(self, 
@@ -384,13 +426,15 @@ class CatalystEvent:
 
 class CatalystMemoryKernel:
     """
-    触媒履歴専用 Memory Kernel
-    
-    反応順序を記憶:
-    - adsorption → reaction: 活性化 (factor > 1)
-    - reaction → adsorption: 不活性化 (factor < 1)
-    
-    H-CSP対応: Θ_env_chem の強化版
+    Memory kernel specialized for catalytic systems.
+
+    Encodes reaction history and order effects, including:
+      - adsorption → reaction: activation enhancement
+      - reaction → adsorption: deactivation or poisoning
+
+    This kernel explicitly captures non-commutative
+    reaction pathways, which are invisible in standard
+    Markovian quantum dynamics.
     
     Usage:
         kernel = CatalystMemoryKernel(eta=0.3)
@@ -503,9 +547,10 @@ class CatalystMemoryKernel:
 
 class SimpleMemoryKernel:
     """
-    Simplified Memory Kernel for basic tests
-    
-    K(t, t') = η * exp(-(t-t')/τ) * (1 + γ*(t-t'))
+    Simplified memory kernel for testing and benchmarking.
+
+    Combines exponential decay with a weak polynomial correction
+    to emulate generic non-Markovian behavior.
     """
     
     def __init__(self, eta: float = 0.2, tau: float = 5.0, gamma: float = 0.5):
