@@ -424,9 +424,14 @@ if __name__ == "__main__":
     print("Λ³ Theory Bridge Test")
     print("="*70)
     
-    import sys
-    sys.path.insert(0, '/home/claude/memory_dft')
-    from core.sparse_engine import SparseHamiltonianEngine
+    # インポート
+    try:
+        from memory_dft.core.sparse_engine import SparseHamiltonianEngine
+    except ImportError:
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core.sparse_engine import SparseHamiltonianEngine
     
     # テスト系
     engine = SparseHamiltonianEngine(n_sites=4, use_gpu=False, verbose=False)
