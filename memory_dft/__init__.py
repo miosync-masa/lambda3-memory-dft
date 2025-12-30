@@ -1,56 +1,60 @@
 """
-Memory-DFT: Density Functional Theory with Memory
-=================================================
+Memory-DFT: History-Dependent Density Functional Theory
+=======================================================
 
-H-CSP/Λ³理論に基づく履歴依存密度汎関数理論
+A framework for incorporating memory effects into density
+functional theory calculations, capturing path-dependent
+phenomena that standard DFT cannot describe.
 
-理論的背景:
-- γ_total = γ_local + γ_memory
-- ED距離分解により導出:
-    γ_total (r=∞) = 2.604
-    γ_local (r≤2) = 1.388  ← Markovian (Lie & Fullwood PRL 2025)
-    γ_memory      = 1.216  ← Non-Markovian extension (46.7%)
-- Memory kernel = Σ w_i K_i (H-CSP環境階層)
-- 非Markov量子力学の密度汎関数実装
+Key Insight:
+  Standard DFT: E[ρ(r)]        - Same structure = Same energy
+  Memory-DFT:   E[ρ(r), history] - Different history = Different energy
+
+Theoretical Background:
+  Correlation decomposition by distance filtering:
+    γ_total (r=∞) = 2.604   ← Full correlations
+    γ_local (r≤2) = 1.388   ← Markovian sector
+    γ_memory      = 1.216   ← Non-Markovian (46.7%)
+
+  This shows that nearly half of quantum correlations
+  require history-dependent treatment.
 
 Key Results:
-- Path dependence: 22.84x amplification
-- Catalyst history: Standard QM |ΔΛ|=0, Memory-DFT |ΔΛ|=51.07
-- 46.7% of correlations require Memory kernel!
+  - Path dependence: 22.84x amplification
+  - Catalyst history: Standard QM |Δλ|=0, Memory-DFT |Δλ|=51.07
+  - Compression hysteresis: validated
 
 Structure:
   memory_dft/
   ├── core/
-  │   ├── memory_kernel.py      # 3階層Kernel (field/phys/chem) + Catalyst
-  │   ├── repulsive_kernel.py   # 🩲 Repulsive Memory (Pauli + Hysteresis)
-  │   ├── history_manager.py    # 履歴保持 + Λ重み付け
-  │   ├── sparse_engine.py      # CuPy + Sparse 基盤
-  │   └── hubbard_engine.py     # Hubbard model for chemical tests
+  │   ├── memory_kernel.py      # 3-layer kernel (field/phys/chem)
+  │   ├── repulsive_kernel.py   # Compression memory
+  │   ├── history_manager.py    # History tracking
+  │   ├── sparse_engine.py      # Sparse Hamiltonian
+  │   └── hubbard_engine.py     # Hubbard model
   ├── solvers/
-  │   ├── lanczos_memory.py     # Lanczos + Memory項
-  │   └── time_evolution.py     # 時間発展エンジン
+  │   ├── lanczos_memory.py     # Lanczos + memory
+  │   ├── time_evolution.py     # Time evolution
+  │   ├── memory_indicators.py  # Memory quantification (ΔO, M(t), γ)
+  │   └── chemical_reaction.py  # Surface chemistry solver
   ├── physics/
-  │   ├── lambda3_bridge.py     # Λ³理論との接続
-  │   └── vorticity.py          # γ計算（ED距離フィルター）
+  │   ├── lambda3_bridge.py     # Stability diagnostics
+  │   └── vorticity.py          # γ decomposition
   └── tests/
-      ├── test_h2_memory.py     # H2分子での検証
-      └── test_chemical.py      # 化学変化テスト (A/B/C/D)
+      ├── test_chemical.py      # Chemical tests (A/B/C/D)
+      └── test_repulsive.py     # Repulsive tests (E1/E2/E3)
 
 Reference:
   Lie & Fullwood, PRL 135, 230204 (2025)
-  "Quantum States Over Time are Uniquely Represented by a CPTP Map"
 
 Author: Masamichi Iizumi, Tamaki Iizumi
-Based on: Λ³/H-CSP Theory v2.0
-
-🩲→🧪→Λ³
 """
 
 __version__ = "0.2.0"
-__author__ = "Masamichi Iizumi, Tamaki Iizumi"
 
 # Core components
 from .core.memory_kernel import (
+    MemoryKernelBase,
     PowerLawKernel,
     StretchedExpKernel,
     StepKernel,
@@ -99,12 +103,27 @@ from .solvers.time_evolution import (
     quick_evolve
 )
 
+from .solvers.memory_indicators import (
+    MemoryIndicator,
+    MemoryMetrics,
+    HysteresisAnalyzer
+)
+
+from .solvers.chemical_reaction import (
+    ChemicalReactionSolver,
+    SurfaceHamiltonianEngine,
+    LanczosEvolver,
+    ReactionEvent,
+    ReactionPath,
+    PathResult
+)
+
 # Physics
 from .physics.lambda3_bridge import (
     Lambda3Calculator,
+    HCSPValidator,
     LambdaState,
-    StabilityPhase,
-    HCSPValidator
+    StabilityPhase
 )
 
 from .physics.vorticity import (
@@ -115,37 +134,41 @@ from .physics.vorticity import (
 )
 
 __all__ = [
-    # Kernels
+    # Version
+    '__version__',
+    
+    # Core - Memory Kernels
+    'MemoryKernelBase',
     'PowerLawKernel',
-    'StretchedExpKernel', 
+    'StretchedExpKernel',
     'StepKernel',
     'CompositeMemoryKernel',
     'CompositeMemoryKernelGPU',
     'KernelWeights',
-    'CatalystMemoryKernel',
-    'CatalystEvent',
     'SimpleMemoryKernel',
     
-    # History
+    # Core - Catalyst
+    'CatalystMemoryKernel',
+    'CatalystEvent',
+    
+    # Core - Repulsive
+    'RepulsiveMemoryKernel',
+    'CompressionEvent',
+    'ExtendedCompositeKernel',
+    
+    # Core - History
     'HistoryManager',
     'HistoryManagerGPU',
     'LambdaDensityCalculator',
     'StateSnapshot',
     
-    # Sparse Engine
+    # Core - Engines
     'SparseHamiltonianEngine',
     'SystemGeometry',
-    
-    # Hubbard Engine
     'HubbardEngine',
     'HubbardResult',
     
-    # Repulsive Memory (🩲)
-    'RepulsiveMemoryKernel',
-    'CompressionEvent',
-    'ExtendedCompositeKernel',
-    
-    # Solvers
+    # Solvers - Lanczos
     'MemoryLanczosSolver',
     'AdaptiveMemorySolver',
     'lanczos_expm_multiply',
@@ -153,6 +176,19 @@ __all__ = [
     'EvolutionConfig',
     'EvolutionResult',
     'quick_evolve',
+    
+    # Solvers - Memory Indicators
+    'MemoryIndicator',
+    'MemoryMetrics',
+    'HysteresisAnalyzer',
+    
+    # Solvers - Chemical Reaction
+    'ChemicalReactionSolver',
+    'SurfaceHamiltonianEngine',
+    'LanczosEvolver',
+    'ReactionEvent',
+    'ReactionPath',
+    'PathResult',
     
     # Physics
     'Lambda3Calculator',
