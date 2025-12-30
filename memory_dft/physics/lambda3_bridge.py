@@ -1,23 +1,31 @@
 """
-Λ³ Theory Bridge for Memory-DFT
-================================
+Stability and Memory Diagnostics for Memory-DFT
+===============================================
 
-H-CSP/Λ³理論とMemory-DFTの接続
+This module provides diagnostic tools for analyzing
+stability, criticality, and history-dependent behavior
+in Memory-DFT simulations.
 
-Λ³理論の核心:
-- Λ = K / |V|_eff （安定性指標）
-- EDR (Energy Density Ratio) = 工学版Λ
-- 臨界条件: Λ = 1 で相転移/破壊
+Core quantity:
+- Λ = K / |V_eff|
+  (dimensionless stability indicator)
 
-H-CSP五公理:
-1. 制約充足の階層性
-2. 非可換充足
-3. 全体保存
-4. 再帰生成
-5. 拍動的平衡
+Physical interpretation:
+- Λ < 1   : bound / stable regime
+- Λ ≈ 1   : critical regime (onset of instability)
+- Λ > 1   : unbound / unstable regime
+
+This formulation is equivalent to an energy-density ratio
+used in mechanics and materials science, extended here
+to quantum many-body dynamics with memory effects.
+
+Key features:
+- Detection of critical transitions
+- Path-dependent stability analysis
+- Environmental renormalization of effective binding
+- Quantitative diagnostics for non-Markovian dynamics
 
 Author: Masamichi Iizumi, Tamaki Iizumi
-Based on: H-CSP × Λ³/EDR 理論メモ v2.0
 """
 
 import numpy as np
@@ -44,7 +52,26 @@ class StabilityPhase(Enum):
 
 @dataclass
 class LambdaState:
-    """Λ状態の完全記述"""
+    """
+    Complete description of the instantaneous stability state.
+
+    Attributes
+    ----------
+    Lambda : float
+        Dimensionless stability parameter Λ = K / |V_eff|.
+    K : float
+        Kinetic (or destabilizing) energy contribution.
+    V_eff : float
+        Effective binding energy magnitude.
+    Lambda_dot : float
+        Time derivative of Λ, used to detect dynamic instability.
+    K_components : dict
+        Decomposition of kinetic contributions (optional).
+    V_components : dict
+        Decomposition of binding contributions (optional).
+    phase : StabilityPhase
+        Qualitative stability regime inferred from Λ.
+    """
     # 基本Λ
     Lambda: float
     K: float  # 運動/破壊エネルギー密度
@@ -76,12 +103,20 @@ class LambdaState:
 
 class Lambda3Calculator:
     """
-    Λ³理論に基づく計算機
-    
-    Λ = K / |V|_eff
-    
-    K = K_th + K_mech + K_EM + K_rad
-    |V|_eff = |V|_mat - Δ|V|_EM - Δ|V|_rad - Δ|V|_oxide - Δ|V|_corr + ...
+    Stability calculator based on an energy-density ratio.
+
+    The stability parameter is defined as
+
+        Λ = K / |V_eff|
+
+    where:
+    - K is the kinetic or destabilizing energy contribution
+    - V_eff is the effective binding energy
+
+    This quantity provides a dimensionless measure of
+    proximity to instability and is particularly useful
+    for detecting path-dependent and non-Markovian effects
+    in time-dependent quantum simulations.
     """
     
     def __init__(self, use_gpu: bool = True):
@@ -148,17 +183,15 @@ class Lambda3Calculator:
                     H_potential,
                     environment: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """
-        EDR (Energy Density Ratio) を計算
-        
-        工学版Λ：環境パラメータを含む
-        
-        Args:
-            environment: 環境パラメータ
-                - T: 温度 [K]
-                - B: 磁場 [T]
-                - p_ext: 外圧 [Pa]
-                - c_O2: 酸素濃度
-                - etc.
+        Compute an environment-renormalized energy-density ratio.
+    
+        This extends the bare stability parameter by including
+        external conditions such as temperature, fields, and
+        chemical environment.
+    
+        The resulting ratio can be interpreted as a
+        generalized safety or stability indicator, analogous
+        to criteria used in materials and mechanical engineering.
         """
         env = environment or {}
         
@@ -210,9 +243,12 @@ class Lambda3Calculator:
                                    lambda_trajectory: np.ndarray,
                                    threshold: float = 1.0) -> Dict[str, Any]:
         """
-        臨界遷移（Λ=1クロス）を検出
-        
-        H-CSP理論：Λ=1で「枝消滅」（相転移/破壊）
+        Detect crossings of the critical threshold Λ = 1.
+    
+        Crossing Λ = 1 indicates a transition between
+        bound and unbound regimes, corresponding to
+        instability, failure, or phase change depending
+        on the physical context.
         """
         crossings = []
         
@@ -248,10 +284,13 @@ class Lambda3Calculator:
 
 
 class HCSPValidator:
-    """
-    H-CSP五公理の検証器
-    
-    Memory-DFTシミュレーション結果がH-CSP公理を満たすか検証
+     """
+    Diagnostic checks for dynamical consistency
+    in Memory-DFT simulations.
+
+    These tests probe conservation, recursion,
+    non-commutativity, and dynamical stability
+    using only observable quantities.
     """
     
     @staticmethod
@@ -274,10 +313,11 @@ class HCSPValidator:
     @staticmethod
     def check_axiom2_noncommutative(results_forward: Any, results_backward: Any) -> bool:
         """
-        公理2: 非可換充足
+        Check for path dependence.
         
-        f(C_i | C_j) ≠ f(C_j | C_i)
-        → 順方向と逆方向で異なる結果
+        Forward and backward protocols leading to
+        different final states indicate non-commutative,
+        history-dependent dynamics.
         """
         L_forward = results_forward.lambdas[-1]
         L_backward = results_backward.lambdas[-1]
@@ -314,10 +354,11 @@ class HCSPValidator:
     @staticmethod
     def check_axiom4_recursive(lambda_series: List[float]) -> Dict[str, Any]:
         """
-        公理4: 再帰生成
+        Check for temporal self-correlation.
         
-        Λ(t+Δt) = F(Λ(t), Λ̇(t))
-        → 自己相関の存在
+        A significant autocorrelation indicates that
+        the current state depends on its recent history,
+        a hallmark of non-Markovian dynamics.
         """
         if len(lambda_series) < 20:
             return {'recursive': True, 'autocorr': 0}
