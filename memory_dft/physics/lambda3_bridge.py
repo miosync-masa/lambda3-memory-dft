@@ -385,6 +385,46 @@ class HCSPValidator:
             'pulsation': self.check_axiom5_pulsation(lambda_series)
         }
 
+# =============================================================================
+# Memory Kernel ↔ Environment Hierarchy Mapping
+# =============================================================================
+
+def map_kernel_to_environment():
+    """
+    Mapping between Memory Kernel components and physical environment classes
+
+    This function provides a conceptual correspondence between different
+    memory-kernel components used in Memory-DFT and their associated
+    physical origins.
+
+    | Memory kernel | Environment class | Physical interpretation        |
+    |---------------|-------------------|--------------------------------|
+    | K_field       | Field-like        | Non-local, scale-invariant     |
+    | K_phys        | Structural        | Relaxation, dissipative        |
+    | K_chem        | Chemical          | Irreversible, hysteretic       |
+    """
+    return {
+        'field': {
+            'kernel': 'PowerLaw',
+            'environment': 'Field-like',
+            'gamma': 1.0,
+            'examples': ['gravity', 'electromagnetic fields', 'radiation'],
+            'characteristic': 'non-local, scale-invariant'
+        },
+        'phys': {
+            'kernel': 'StretchedExponential',
+            'environment': 'Structural / Thermodynamic',
+            'beta': 0.5,
+            'examples': ['temperature', 'humidity', 'pressure'],
+            'characteristic': 'relaxation, partially Markovian'
+        },
+        'chem': {
+            'kernel': 'Step / Piecewise',
+            'environment': 'Chemical',
+            'examples': ['oxidation', 'corrosion', 'pH changes'],
+            'characteristic': 'irreversible, hysteresis, path-dependent'
+        }
+    }
 
 # =============================================================================
 # Test
