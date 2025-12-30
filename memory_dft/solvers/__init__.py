@@ -12,3 +12,18 @@ from .time_evolution import (
     EvolutionResult,
     quick_evolve
 )
+
+from .memory_indicators import (
+    MemoryIndicator,
+    MemoryMetrics,
+    HysteresisAnalyzer
+)
+
+from .chemical_reaction import (
+    ChemicalReactionSolver,
+    SurfaceHamiltonianEngine,
+    LanczosEvolver,
+    ReactionEvent,
+    ReactionPath,
+    PathResult
+)
