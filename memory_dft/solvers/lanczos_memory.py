@@ -359,10 +359,15 @@ if __name__ == "__main__":
     print(f"Backend: {'GPU (CuPy)' if HAS_CUPY else 'CPU (NumPy/SciPy)'}")
     
     # 簡単な2準位系でテスト
-    import sys
-    sys.path.insert(0, '/home/claude/memory_dft/core')
-    from memory_kernel import CompositeMemoryKernel
-    from history_manager import HistoryManager
+    try:
+        from memory_dft.core.memory_kernel import CompositeMemoryKernel
+        from memory_dft.core.history_manager import HistoryManager
+    except ImportError:
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from core.memory_kernel import CompositeMemoryKernel
+        from core.history_manager import HistoryManager
     
     # Backend選択
     xp = cp if HAS_CUPY else np
