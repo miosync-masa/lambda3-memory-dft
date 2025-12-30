@@ -17,11 +17,18 @@ Author: Masamichi Iizumi, Tamaki Iizumi
 Based on: Λ³/H-CSP Theory v2.0
 """
 
-import cupy as cp
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Union, List
 from dataclasses import dataclass
+
+# GPU support (optional)
+try:
+    import cupy as cp
+    HAS_CUPY = True
+except ImportError:
+    cp = np  # Fallback to NumPy
+    HAS_CUPY = False
 
 
 # =============================================================================
@@ -351,6 +358,177 @@ class CompositeMemoryKernelGPU:
         )
         
         return combined / (combined.sum() + 1e-10)
+
+
+# =============================================================================
+# Catalyst Memory Kernel (触媒専用)
+# =============================================================================
+
+@dataclass
+class CatalystEvent:
+    """触媒反応イベント"""
+    event_type: str  # 'adsorption', 'reaction', 'desorption'
+    time: float
+    site: int
+    strength: float
+
+
+class CatalystMemoryKernel:
+    """
+    触媒履歴専用 Memory Kernel
+    
+    反応順序を記憶:
+    - adsorption → reaction: 活性化 (factor > 1)
+    - reaction → adsorption: 不活性化 (factor < 1)
+    
+    H-CSP対応: Θ_env_chem の強化版
+    
+    Usage:
+        kernel = CatalystMemoryKernel(eta=0.3)
+        kernel.add_event(CatalystEvent('adsorption', t=1.0, site=0, strength=0.5))
+        kernel.add_event(CatalystEvent('reaction', t=2.0, site=1, strength=0.3))
+        delta = kernel.compute_memory_contribution(t=3.0, psi)
+    """
+    
+    def __init__(self, eta: float = 0.3, tau_ads: float = 3.0, tau_react: float = 5.0):
+        """
+        Args:
+            eta: Memory strength coefficient
+            tau_ads: Adsorption memory timescale
+            tau_react: Reaction memory timescale
+        """
+        self.eta = eta
+        self.tau_ads = tau_ads
+        self.tau_react = tau_react
+        self.events: list = []
+        self.history: list = []  # (t, Λ, psi) tuples
+    
+    def add_event(self, event: CatalystEvent):
+        """Record catalyst event"""
+        self.events.append(event)
+    
+    def add_state(self, t: float, lambda_val: float, psi: np.ndarray):
+        """Record state in history"""
+        self.history.append((t, lambda_val, psi.copy()))
+        if len(self.history) > 100:
+            self.history = self.history[-100:]
+    
+    def compute_memory_contribution(self, t: float, psi: np.ndarray) -> float:
+        """
+        Compute memory contribution considering catalyst history
+        
+        Order effects:
+        - adsorption before reaction → activation bonus (factor > 1)
+        - reaction before adsorption → penalty (factor < 1)
+        """
+        if len(self.history) == 0:
+            return 0.0
+        
+        delta_lambda = 0.0
+        
+        # Basic memory contribution
+        for t_hist, lambda_hist, psi_hist in self.history:
+            dt = t - t_hist
+            if dt <= 0:
+                continue
+            
+            kernel = np.exp(-dt / self.tau_react)
+            overlap = abs(np.vdot(psi, psi_hist))**2
+            delta_lambda += self.eta * kernel * lambda_hist * overlap
+        
+        # Order effect multiplier
+        order_factor = self._compute_order_factor(t)
+        delta_lambda *= order_factor
+        
+        return delta_lambda
+    
+    def _compute_order_factor(self, t: float) -> float:
+        """
+        Compute order-dependent factor
+        
+        adsorption → reaction: factor > 1 (activation)
+        reaction → adsorption: factor < 1 (deactivation)
+        """
+        if len(self.events) < 2:
+            return 1.0
+        
+        recent = [e for e in self.events if e.time <= t]
+        if len(recent) < 2:
+            return 1.0
+        
+        last_two = recent[-2:]
+        
+        if last_two[0].event_type == 'adsorption' and last_two[1].event_type == 'reaction':
+            return 1.5  # Activation path
+        elif last_two[0].event_type == 'reaction' and last_two[1].event_type == 'adsorption':
+            return 0.7  # Deactivation path
+        else:
+            return 1.0
+    
+    def get_history_summary(self) -> dict:
+        """Get summary of catalyst history"""
+        return {
+            'n_events': len(self.events),
+            'n_states': len(self.history),
+            'event_types': [e.event_type for e in self.events],
+            'event_times': [e.time for e in self.events]
+        }
+    
+    def clear(self):
+        """Clear all history"""
+        self.events = []
+        self.history = []
+    
+    def __repr__(self) -> str:
+        return (
+            f"CatalystMemoryKernel(\n"
+            f"  eta={self.eta}, tau_ads={self.tau_ads}, tau_react={self.tau_react}\n"
+            f"  events={len(self.events)}, history={len(self.history)}\n"
+            f")"
+        )
+
+
+# =============================================================================
+# Simple Memory Kernel (for standalone tests)
+# =============================================================================
+
+class SimpleMemoryKernel:
+    """
+    Simplified Memory Kernel for basic tests
+    
+    K(t, t') = η * exp(-(t-t')/τ) * (1 + γ*(t-t'))
+    """
+    
+    def __init__(self, eta: float = 0.2, tau: float = 5.0, gamma: float = 0.5):
+        self.eta = eta
+        self.tau = tau
+        self.gamma = gamma
+        self.history: list = []
+    
+    def add_state(self, t: float, lambda_val: float, psi: np.ndarray):
+        self.history.append((t, lambda_val, psi.copy()))
+        if len(self.history) > 100:
+            self.history = self.history[-100:]
+    
+    def compute_memory_contribution(self, t: float, psi: np.ndarray) -> float:
+        if len(self.history) == 0:
+            return 0.0
+        
+        delta_lambda = 0.0
+        
+        for t_hist, lambda_hist, psi_hist in self.history:
+            dt = t - t_hist
+            if dt <= 0:
+                continue
+            
+            kernel = np.exp(-dt / self.tau) * (1 + self.gamma * dt)
+            overlap = abs(np.vdot(psi, psi_hist))**2
+            delta_lambda += self.eta * kernel * lambda_hist * overlap
+        
+        return delta_lambda
+    
+    def clear(self):
+        self.history = []
 
 
 # =============================================================================
