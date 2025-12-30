@@ -15,3 +15,8 @@ from .history_manager import (
     LambdaDensityCalculator,
     StateSnapshot
 )
+
+from .sparse_engine import (
+    SparseHamiltonianEngine,
+    SystemGeometry
+)
