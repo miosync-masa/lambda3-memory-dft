@@ -2,17 +2,29 @@
 Lanczos Time Evolution with Memory
 ==================================
 
-Lanczos法による時間発展に Memory 項を追加
+Lanczos-based time evolution with an explicit memory term.
 
-標準: |ψ(t+dt)⟩ = exp(-iHdt)|ψ(t)⟩
+Standard quantum dynamics:
+    |ψ(t+dt)⟩ = exp(-i H dt) |ψ(t)⟩
 
-Memory-DFT: |ψ(t+dt)⟩ = exp(-iHdt)|ψ(t)⟩ + η * |ψ_memory⟩
+Memory-DFT extension:
+    |ψ(t+dt)⟩ = exp(-i H dt) |ψ(t)⟩ + η |ψ_memory⟩
 
-ここで |ψ_memory⟩ = Σ K(t-τ) Λ(τ) |ψ(τ)⟩
+where the memory contribution is defined as
+    |ψ_memory⟩ = Σ_τ K(t - τ) Λ(τ) |ψ(τ)⟩
 
-H-CSP公理4との対応:
-  Λ(t+Δt) = F(Λ(t), Λ̇(t))
-  → 過去の状態が現在に干渉する再帰生成
+This formulation introduces a controlled non-Markovian correction,
+allowing past quantum states to influence present dynamics.
+
+Physical interpretation:
+- η controls the strength of memory effects
+- K(t−τ) is a temporal memory kernel
+- Λ(τ) is a scalar stability or correlation weight associated with past states
+
+This realizes a recursive dynamical update of the form:
+    Λ(t+Δt) = F(Λ(t), dΛ/dt)
+
+which encodes history-dependent feedback into quantum time evolution.
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
@@ -102,15 +114,17 @@ def lanczos_expm_multiply(H_sparse, psi, dt, krylov_dim=30):
 
 class MemoryLanczosSolver:
     """
-    Memory項を含むLanczos時間発展ソルバー
-    
-    これが Memory-DFT の核心計算エンジン！
-    
-    標準のユニタリ発展に、過去の状態からの寄与を追加：
-    
-    |ψ(t+dt)⟩ = (1-η) * exp(-iHdt)|ψ(t)⟩ + η * |ψ_memory⟩
-    
-    η: Memory 強度 (0 = 標準量子力学, 1 = 完全Memory支配)
+    Lanczos time-evolution solver with an explicit memory contribution.
+
+    The state update rule is:
+        |ψ(t+dt)⟩ = (1−η) U(dt)|ψ(t)⟩ + η |ψ_memory⟩
+
+    where:
+    - U(dt) is the unitary time evolution operator
+    - |ψ_memory⟩ is constructed from past states
+    - η ∈ [0,1] controls the relative strength of memory
+
+    Setting η = 0 recovers standard quantum dynamics.
     """
     
     def __init__(self,
