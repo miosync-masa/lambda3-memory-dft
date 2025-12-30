@@ -136,14 +136,28 @@ from .physics.vorticity import (
     MemoryKernelFromGamma
 )
 
-# Visualization
-from .visualization.prl_figures import (
-    fig1_gamma_decomposition,
-    fig2_path_evolution,
-    fig3_memory_comparison,
-    generate_all_prl_figures,
-    COLORS as PRL_COLORS
-)
+# Visualization (optional - requires matplotlib)
+try:
+    from .visualization.prl_figures import (
+        fig1_gamma_decomposition,
+        fig2_path_evolution,
+        fig3_memory_comparison,
+        generate_all_prl_figures,
+        COLORS as PRL_COLORS
+    )
+    HAS_VISUALIZATION = True
+except ImportError:
+    HAS_VISUALIZATION = False
+    # Provide dummy functions
+    def fig1_gamma_decomposition(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def fig2_path_evolution(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def fig3_memory_comparison(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def generate_all_prl_figures(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    PRL_COLORS = {}
 
 __all__ = [
     # Version
@@ -212,7 +226,8 @@ __all__ = [
     'GammaExtractor',
     'MemoryKernelFromGamma',
     
-    # Visualization
+    # Visualization (optional)
+    'HAS_VISUALIZATION',
     'fig1_gamma_decomposition',
     'fig2_path_evolution',
     'fig3_memory_comparison',
