@@ -1,4 +1,4 @@
-# Memory-DFT
+# Direct Schrödinger Evolution（DSE)
 
 [![Tests](https://github.com/miosync-masa/lambda3-memory-dft/actions/workflows/test.yml/badge.svg)](https://github.com/miosync-masa/lambda3-memory-dft/actions/workflows/test.yml)
 [![PyPI version](https://badge.fury.io/py/memory-dft.svg)](https://badge.fury.io/py/memory-dft)
