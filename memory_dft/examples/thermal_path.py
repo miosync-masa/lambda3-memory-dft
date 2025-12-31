@@ -9,12 +9,12 @@ different quantum outcomes.
 DFT cannot capture this. Memory-DFT can!
 
 Key insight:
-  - Path A: 50K → 300K → 50K (heat then cool)
-  - Path B: 50K → 10K → 300K → 50K (cool then heat then cool)
+  - Path A: 50K -> 300K -> 50K (heat then cool)
+  - Path B: 50K -> 10K -> 300K -> 50K (cool then heat then cool)
   - Same final temperature (50K)
   - Different quantum history
-  - Memory-DFT: ΔΛ > 0 (path dependence detected!)
-  - Standard DFT: ΔΛ ≡ 0 (no path dependence)
+  - Memory-DFT: Path dependence detected (different stability parameter)
+  - Standard DFT: No path dependence (history-blind)
 
 Usage:
     python -m memory_dft.examples.thermal_path
@@ -155,7 +155,7 @@ class ThermalPathSolver:
         return self
     
     def compute_thermal_lambda(self, T_kelvin: float) -> float:
-        """Compute Λ at given temperature."""
+        """Compute stability parameter (K/|V|) at given temperature."""
         if self.eigenvalues is None:
             raise ValueError("Diagonalize first!")
         
@@ -222,7 +222,7 @@ class ThermalPathSolver:
             beta = T_to_beta(T, self.t_hop)
             
             for step in range(steps_per_T):
-                # Compute current Λ
+                # Compute current stability parameter
                 K_total = 0.0
                 V_total = 0.0
                 
@@ -302,18 +302,18 @@ def run_thermal_path_test():
     delta_lambda = abs(result_A['lambda_final'] - result_B['lambda_final'])
     
     print("\n" + "=" * 70)
-    print("📊 RESULTS")
+    print("RESULTS")
     print("=" * 70)
-    print(f"\n   Path A final Λ: {result_A['lambda_final']:.4f}")
-    print(f"   Path B final Λ: {result_B['lambda_final']:.4f}")
-    print(f"\n   ΔΛ = {delta_lambda:.4f}")
+    print(f"\n   Path A final stability: {result_A['lambda_final']:.4f}")
+    print(f"   Path B final stability: {result_B['lambda_final']:.4f}")
+    print(f"\n   Difference = {delta_lambda:.4f}")
     
     if delta_lambda > 0.01:
-        print("\n   ✅ THERMAL PATH DEPENDENCE DETECTED!")
-        print("   → Same final T, different history → Different quantum state")
-        print("   → DFT would see ΔΛ ≡ 0 (blind to history)")
+        print("\n   THERMAL PATH DEPENDENCE DETECTED!")
+        print("   -> Same final T, different history -> Different quantum state")
+        print("   -> DFT would see no difference (blind to history)")
     else:
-        print("\n   ⚠️ Path dependence is small (may need more steps)")
+        print("\n   Path dependence is small (may need more steps)")
     
     return result_A, result_B
 
@@ -347,11 +347,11 @@ def run_chirality_test():
     delta_lambda = abs(result_1['lambda_final'] - result_2['lambda_final'])
     
     print("\n" + "=" * 70)
-    print("📊 CHIRALITY RESULTS")
+    print("CHIRALITY RESULTS")
     print("=" * 70)
-    print(f"\n   Fast heat → slow cool: Λ = {result_1['lambda_final']:.4f}")
-    print(f"   Slow heat → fast cool: Λ = {result_2['lambda_final']:.4f}")
-    print(f"\n   ΔΛ (chirality) = {delta_lambda:.4f}")
+    print(f"\n   Fast heat -> slow cool: stability = {result_1['lambda_final']:.4f}")
+    print(f"   Slow heat -> fast cool: stability = {result_2['lambda_final']:.4f}")
+    print(f"\n   Difference (chirality) = {delta_lambda:.4f}")
     
     return result_1, result_2
 
