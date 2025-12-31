@@ -127,7 +127,7 @@ def run(
     try:
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'memory_dft', 'core')
+        core_path = os.path.join(os.path.dirname(__file__), 'core')
         if core_path not in sys.path:
             sys.path.insert(0, core_path)
         from hubbard_engine import HubbardEngine
@@ -234,7 +234,7 @@ def compare(
     try:
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'memory_dft', 'core')
+        core_path = os.path.join(os.path.dirname(__file__), 'core')
         if core_path not in sys.path:
             sys.path.insert(0, core_path)
         from hubbard_engine import HubbardEngine
@@ -368,7 +368,7 @@ def gamma(
     try:
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'memory_dft', 'core')
+        core_path = os.path.join(os.path.dirname(__file__), 'core')
         if core_path not in sys.path:
             sys.path.insert(0, core_path)
         from hubbard_engine import HubbardEngine
@@ -461,7 +461,7 @@ def hysteresis(
         # Direct import to avoid __init__.py dependency issues
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'memory_dft', 'core')
+        core_path = os.path.join(os.path.dirname(__file__), 'core')
         if core_path not in sys.path:
             sys.path.insert(0, core_path)
         from repulsive_kernel import RepulsiveMemoryKernel
@@ -542,6 +542,209 @@ def hysteresis(
                 'hysteresis_area': area,
                 'V_compress': V_compress_all[:steps],
                 'V_expand': V_expand_all[:steps],
+            }
+        }
+        output.write_text(json.dumps(data, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else x))
+        typer.echo(f"\n💾 Saved to {output}")
+    
+    typer.echo("\n✅ Done!")
+
+
+# =============================================================================
+# dft-compare command (PySCF - Real DFT!)
+# =============================================================================
+
+@app.command("dft-compare")
+def dft_compare(
+    molecule: str = typer.Option("H2", "--mol", "-m", help="Molecule: H2, LiH, or custom 'atom x y z; atom x y z'"),
+    basis: str = typer.Option("sto-3g", "--basis", "-b", help="Basis set (sto-3g, cc-pvdz, etc.)"),
+    xc: str = typer.Option("LDA", "--xc", help="XC functional (LDA, B3LYP, PBE, etc.)"),
+    r_stretch: float = typer.Option(1.5, "--r-stretch", help="Max stretch distance (Å)"),
+    r_compress: float = typer.Option(0.5, "--r-compress", help="Min compress distance (Å)"),
+    steps: int = typer.Option(5, "-n", "--steps", help="Steps per path segment"),
+    output: Optional[Path] = typer.Option(None, "-o", "--output", help="Output JSON file"),
+):
+    """
+    Compare DFT vs DSE using PySCF (REAL DFT!).
+    
+    This uses actual DFT calculations to demonstrate that:
+    - DFT gives identical energies for different paths to same final state
+    - DSE captures history dependence
+    
+    Requires: pip install pyscf
+    
+    Example:
+        memory-dft dft-compare --mol H2 --basis cc-pvdz --xc B3LYP
+    """
+    print_banner()
+    
+    typer.echo("🔬 DFT vs DSE Comparison (PySCF)")
+    typer.echo("─" * 50)
+    typer.echo(f"  Molecule:    {molecule}")
+    typer.echo(f"  Basis:       {basis}")
+    typer.echo(f"  XC:          {xc}")
+    typer.echo(f"  Stretch:     {r_stretch} Å")
+    typer.echo(f"  Compress:    {r_compress} Å")
+    typer.echo(f"  Steps:       {steps} per segment")
+    typer.echo()
+    
+    # Import PySCF interface
+    try:
+        import sys
+        import os
+        interfaces_path = os.path.join(os.path.dirname(__file__), 'interfaces')
+        if interfaces_path not in sys.path:
+            sys.path.insert(0, interfaces_path)
+        from pyscf_interface import (
+            DSECalculator,
+            create_h2_stretch_path,
+            create_h2_compress_path,
+            GeometryStep,
+        )
+    except ImportError as e:
+        typer.echo(f"❌ Error: PySCF not available: {e}", err=True)
+        typer.echo("   Install with: pip install pyscf", err=True)
+        raise typer.Exit(1)
+    
+    # Determine equilibrium distance based on molecule
+    if molecule.upper() == "H2":
+        r_eq = 0.74
+        atom_template = "H 0 0 0; H 0 0 {r}"
+    elif molecule.upper() == "LIH":
+        r_eq = 1.60
+        atom_template = "Li 0 0 0; H 0 0 {r}"
+    else:
+        # Custom molecule - assume diatomic with variable z
+        r_eq = 1.0
+        atom_template = molecule + "; X 0 0 {r}"  # User provides first atom
+        typer.echo(f"  ⚠️  Custom molecule: using r_eq = {r_eq} Å")
+    
+    typer.echo(f"  r_eq:        {r_eq} Å")
+    typer.echo()
+    
+    # Create calculator
+    typer.echo("Initializing DSE calculator...")
+    calc = DSECalculator(
+        basis=basis,
+        xc=xc,
+        memory_eta=0.05,
+        memory_tau=5.0,
+        verbose=0
+    )
+    
+    # Create paths
+    typer.echo("Creating paths...")
+    
+    def make_path(r_start, r_mid, r_end, n_steps, template):
+        """Create a path with given distances."""
+        path = []
+        t = 0.0
+        dt = 1.0
+        
+        # First segment
+        for r in np.linspace(r_start, r_mid, n_steps):
+            atoms = template.format(r=r)
+            path.append(GeometryStep(atoms=atoms, time=t))
+            t += dt
+        
+        # Second segment
+        for r in np.linspace(r_mid, r_end, n_steps):
+            atoms = template.format(r=r)
+            path.append(GeometryStep(atoms=atoms, time=t))
+            t += dt
+        
+        return path
+    
+    if molecule.upper() in ["H2", "LIH"]:
+        # Path 1: stretch then return
+        path_stretch = make_path(r_eq, r_stretch, r_eq, steps, atom_template)
+        # Path 2: compress then return
+        path_compress = make_path(r_eq, r_compress, r_eq, steps, atom_template)
+        
+        typer.echo(f"  Path 1 (stretch→return): {len(path_stretch)} steps")
+        typer.echo(f"  Path 2 (compress→return): {len(path_compress)} steps")
+    else:
+        typer.echo("❌ Custom molecules not fully supported yet", err=True)
+        raise typer.Exit(1)
+    
+    # Run calculations
+    typer.echo()
+    typer.echo("Running DFT calculations...")
+    
+    with typer.progressbar(length=2, label="  Computing") as progress:
+        result1 = calc.compute_path(path_stretch, label="Stretch→Return")
+        progress.update(1)
+        result2 = calc.compute_path(path_compress, label="Compress→Return")
+        progress.update(1)
+    
+    # Calculate differences
+    diff_dft = abs(result1.E_dft_final - result2.E_dft_final)
+    diff_dse = abs(result1.E_dse_final - result2.E_dse_final)
+    
+    # Display results
+    typer.echo()
+    typer.echo("=" * 60)
+    typer.echo("DSE vs DFT Path Comparison")
+    typer.echo("=" * 60)
+    
+    typer.echo(f"\nPath 1: Stretch→Return")
+    typer.echo(f"  E_DFT (final):  {result1.E_dft_final:.6f} Ha")
+    typer.echo(f"  E_DSE (final):  {result1.E_dse_final:.6f} Ha")
+    typer.echo(f"  Memory effect:  {result1.memory_effect:.6f} Ha")
+    
+    typer.echo(f"\nPath 2: Compress→Return")
+    typer.echo(f"  E_DFT (final):  {result2.E_dft_final:.6f} Ha")
+    typer.echo(f"  E_DSE (final):  {result2.E_dse_final:.6f} Ha")
+    typer.echo(f"  Memory effect:  {result2.memory_effect:.6f} Ha")
+    
+    typer.echo()
+    typer.echo("─" * 60)
+    typer.echo(f"|ΔE| DFT:  {diff_dft:.8f} Ha  ({diff_dft * 27.211:.4f} eV)")
+    typer.echo(f"|ΔE| DSE:  {diff_dse:.8f} Ha  ({diff_dse * 27.211:.4f} eV)")
+    
+    if diff_dft < 1e-8:
+        typer.echo()
+        typer.echo("🎯 DFT: Cannot distinguish paths! (ΔE ≈ 0)")
+        typer.echo(f"🎯 DSE: REVEALS difference! (ΔE = {diff_dse:.6f} Ha)")
+    else:
+        ratio = diff_dse / diff_dft if diff_dft > 0 else float('inf')
+        typer.echo(f"\n  Amplification: {ratio:.1f}x")
+    
+    typer.echo("=" * 60)
+    
+    # Save output
+    if output:
+        data = {
+            'config': {
+                'molecule': molecule,
+                'basis': basis,
+                'xc': xc,
+                'r_eq': r_eq,
+                'r_stretch': r_stretch,
+                'r_compress': r_compress,
+                'steps': steps,
+            },
+            'path1': {
+                'label': 'Stretch→Return',
+                'E_dft': result1.E_dft,
+                'E_dse': result1.E_dse,
+                'E_dft_final': result1.E_dft_final,
+                'E_dse_final': result1.E_dse_final,
+                'memory_effect': result1.memory_effect,
+            },
+            'path2': {
+                'label': 'Compress→Return',
+                'E_dft': result2.E_dft,
+                'E_dse': result2.E_dse,
+                'E_dft_final': result2.E_dft_final,
+                'E_dse_final': result2.E_dse_final,
+                'memory_effect': result2.memory_effect,
+            },
+            'comparison': {
+                'delta_dft_Ha': diff_dft,
+                'delta_dft_eV': diff_dft * 27.211,
+                'delta_dse_Ha': diff_dse,
+                'delta_dse_eV': diff_dse * 27.211,
             }
         }
         output.write_text(json.dumps(data, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else x))
