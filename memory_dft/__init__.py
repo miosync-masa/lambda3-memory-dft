@@ -30,14 +30,14 @@ Key Results:
 Structure (Refactored):
   memory_dft/
   ├── core/
-  │   ├── memory_kernel.py      # 3-layer kernel (field/phys/chem)
+  │   ├── memory_kernel.py      # 4-layer kernel (field/phys/chem/exclusion)
   │   ├── repulsive_kernel.py   # Compression memory
   │   ├── history_manager.py    # History tracking
   │   ├── sparse_engine.py      # Sparse Hamiltonian
   │   ├── hubbard_engine.py     # Hubbard model
-  │   ├── lattice.py            # Lattice geometry (NEW)
-  │   ├── operators.py          # Spin operators (NEW)
-  │   └── hamiltonian.py        # Hamiltonian builders (NEW)
+  │   ├── lattice.py            # Lattice geometry
+  │   ├── operators.py          # Spin operators
+  │   └── hamiltonian.py        # Hamiltonian builders
   ├── solvers/
   │   ├── lanczos_memory.py     # Lanczos + memory
   │   ├── time_evolution.py     # Time evolution
@@ -46,14 +46,17 @@ Structure (Refactored):
   ├── physics/
   │   ├── lambda3_bridge.py     # Stability diagnostics
   │   ├── vorticity.py          # γ decomposition
-  │   └── thermodynamics.py     # Thermal utilities (NEW)
-  ├── examples/                  # Example scripts (NEW)
+  │   ├── thermodynamics.py     # Thermal utilities
+  │   └── rdm.py                # 2-RDM analysis
+  ├── interfaces/               # External package interfaces (NEW)
+  │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
+  ├── examples/                 # Example scripts
   │   ├── thermal_path.py       # Thermal path demo
   │   └── ladder_2d.py          # 2D lattice demo
   ├── visualization/
   │   └── prl_figures.py        # PRL publication figures
   └── tests/
-      └── ...                    # Test suites
+      └── ...                   # Test suites
 
 Reference:
   Lie & Fullwood, PRL 135, 230204 (2025)
@@ -63,7 +66,7 @@ DOI: 10.5281/zenodo.18095869
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
-__version__ = "0.4.0"  # Bumped for refactoring
+__version__ = "1.4.0"
 
 # =============================================================================
 # Core Components
@@ -75,6 +78,7 @@ from .core.memory_kernel import (
     PowerLawKernel,
     StretchedExpKernel,
     StepKernel,
+    ExclusionKernel,
     CompositeMemoryKernel,
     CompositeMemoryKernelGPU,
     KernelWeights,
@@ -109,17 +113,17 @@ from .core.hubbard_engine import (
     HubbardResult
 )
 
-# Lattice Geometry (NEW - refactored from ladder_dse.py)
+# Lattice Geometry
 from .core.lattice import (
     SystemGeometry,
     LatticeGeometry2D,
-    LatticeGeometry,  # Alias
+    LatticeGeometry,
     create_chain,
     create_ladder,
     create_square_lattice,
 )
 
-# Spin Operators (NEW - refactored from ladder_dse.py)
+# Spin Operators
 from .core.operators import (
     SpinOperators,
     pauli_matrices,
@@ -129,7 +133,7 @@ from .core.operators import (
     compute_correlation,
 )
 
-# Hamiltonian Builders (NEW - refactored from ladder_dse.py)
+# Hamiltonian Builders
 from .core.hamiltonian import (
     HamiltonianBuilder,
     build_hamiltonian,
@@ -185,7 +189,7 @@ from .physics.vorticity import (
     MemoryKernelFromGamma
 )
 
-# Thermodynamics (NEW - refactored from thermal_dse.py)
+# Thermodynamics
 from .physics.thermodynamics import (
     K_B_EV,
     T_to_beta,
@@ -202,7 +206,7 @@ from .physics.thermodynamics import (
     sample_thermal_state,
 )
 
-# Two-Particle Reduced Density Matrix (NEW)
+# Two-Particle Reduced Density Matrix
 from .physics.rdm import (
     RDM2Result,
     compute_2rdm,
@@ -214,6 +218,39 @@ from .physics.rdm import (
     from_pyscf_rdm2,
     to_pyscf_rdm2,
 )
+
+# =============================================================================
+# Interfaces (optional - requires PySCF)
+# =============================================================================
+
+try:
+    from .interfaces import (
+        DSECalculator,
+        PathResult as DFTPathResult,
+        ComparisonResult,
+        GeometryStep,
+        MemoryKernelDFT,
+        create_h2_stretch_path,
+        create_h2_compress_path,
+        demo_h2_comparison,
+        HAS_PYSCF,
+    )
+except ImportError:
+    HAS_PYSCF = False
+    
+    def DSECalculator(*args, **kwargs):
+        raise ImportError("PySCF required: pip install pyscf")
+    def create_h2_stretch_path(*args, **kwargs):
+        raise ImportError("PySCF required: pip install pyscf")
+    def create_h2_compress_path(*args, **kwargs):
+        raise ImportError("PySCF required: pip install pyscf")
+    def demo_h2_comparison(*args, **kwargs):
+        raise ImportError("PySCF required: pip install pyscf")
+    
+    DFTPathResult = None
+    ComparisonResult = None
+    GeometryStep = None
+    MemoryKernelDFT = None
 
 # =============================================================================
 # Visualization (optional - requires matplotlib)
@@ -255,10 +292,6 @@ def _deprecated_import(name, new_location):
         stacklevel=3
     )
 
-# These were previously in solvers/thermal_dse.py and solvers/ladder_dse.py
-# Now they're in core/ and physics/
-# Kept for backward compatibility but will show deprecation warning
-
 # Note: ThermalDSESolver and LadderDSESolver have been removed.
 # Use the new examples/ module for similar functionality:
 #   from memory_dft.examples.thermal_path import ThermalPathSolver
@@ -278,6 +311,7 @@ __all__ = [
     'PowerLawKernel',
     'StretchedExpKernel',
     'StepKernel',
+    'ExclusionKernel',
     'CompositeMemoryKernel',
     'CompositeMemoryKernelGPU',
     'KernelWeights',
@@ -299,7 +333,7 @@ __all__ = [
     'HubbardEngine',
     'HubbardResult',
     
-    # Core - Lattice (NEW)
+    # Core - Lattice
     'SystemGeometry',
     'LatticeGeometry2D',
     'LatticeGeometry',
@@ -307,7 +341,7 @@ __all__ = [
     'create_ladder',
     'create_square_lattice',
     
-    # Core - Operators (NEW)
+    # Core - Operators
     'SpinOperators',
     'pauli_matrices',
     'create_spin_operators',
@@ -315,7 +349,7 @@ __all__ = [
     'compute_magnetization',
     'compute_correlation',
     
-    # Core - Hamiltonian (NEW)
+    # Core - Hamiltonian
     'HamiltonianBuilder',
     'build_hamiltonian',
     
@@ -355,7 +389,7 @@ __all__ = [
     'GammaExtractor',
     'MemoryKernelFromGamma',
     
-    # Physics - Thermodynamics (NEW)
+    # Physics - Thermodynamics
     'K_B_EV',
     'T_to_beta',
     'beta_to_T',
@@ -370,7 +404,7 @@ __all__ = [
     'thermal_density_matrix',
     'sample_thermal_state',
     
-    # Physics - 2-RDM (NEW)
+    # Physics - 2-RDM
     'RDM2Result',
     'compute_2rdm',
     'compute_2rdm_with_ops',
@@ -380,6 +414,17 @@ __all__ = [
     'filter_by_distance',
     'from_pyscf_rdm2',
     'to_pyscf_rdm2',
+    
+    # Interfaces - PySCF (NEW)
+    'HAS_PYSCF',
+    'DSECalculator',
+    'DFTPathResult',
+    'ComparisonResult',
+    'GeometryStep',
+    'MemoryKernelDFT',
+    'create_h2_stretch_path',
+    'create_h2_compress_path',
+    'demo_h2_comparison',
     
     # Visualization
     'HAS_VISUALIZATION',
