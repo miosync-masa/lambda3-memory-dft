@@ -2,9 +2,6 @@
 Direct Schrödinger Evolution (DSE)
 ==================================
 
-A framework for history-dependent quantum dynamics through
-direct solution of the Schrödinger equation.
-
 DFT erases history. DSE remembers.
 
 Key Insight:
@@ -202,6 +199,19 @@ from .physics.thermodynamics import (
     sample_thermal_state,
 )
 
+# Two-Particle Reduced Density Matrix (NEW)
+from .physics.rdm import (
+    RDM2Result,
+    compute_2rdm,
+    compute_2rdm_with_ops,
+    compute_density_density_correlation,
+    compute_connected_correlation,
+    compute_correlation_matrix,
+    filter_by_distance,
+    from_pyscf_rdm2,
+    to_pyscf_rdm2,
+)
+
 # =============================================================================
 # Visualization (optional - requires matplotlib)
 # =============================================================================
@@ -356,6 +366,17 @@ __all__ = [
     'compute_heat_capacity',
     'thermal_density_matrix',
     'sample_thermal_state',
+    
+    # Physics - 2-RDM (NEW)
+    'RDM2Result',
+    'compute_2rdm',
+    'compute_2rdm_with_ops',
+    'compute_density_density_correlation',
+    'compute_connected_correlation',
+    'compute_correlation_matrix',
+    'filter_by_distance',
+    'from_pyscf_rdm2',
+    'to_pyscf_rdm2',
     
     # Visualization
     'HAS_VISUALIZATION',
