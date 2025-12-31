@@ -127,7 +127,7 @@ def run(
     try:
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'core')
+        core_path = os.path.join(os.path.dirname(__file__), 'memory_dft', 'core')
         if core_path not in sys.path:
             sys.path.insert(0, core_path)
         from hubbard_engine import HubbardEngine
@@ -234,7 +234,7 @@ def compare(
     try:
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'core')
+        core_path = os.path.join(os.path.dirname(__file__), 'memory_dft', 'core')
         if core_path not in sys.path:
             sys.path.insert(0, core_path)
         from hubbard_engine import HubbardEngine
@@ -368,7 +368,7 @@ def gamma(
     try:
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'core')
+        core_path = os.path.join(os.path.dirname(__file__), 'memory_dft', 'core')
         if core_path not in sys.path:
             sys.path.insert(0, core_path)
         from hubbard_engine import HubbardEngine
@@ -461,7 +461,7 @@ def hysteresis(
         # Direct import to avoid __init__.py dependency issues
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'core')
+        core_path = os.path.join(os.path.dirname(__file__), 'memory_dft', 'core')
         if core_path not in sys.path:
             sys.path.insert(0, core_path)
         from repulsive_kernel import RepulsiveMemoryKernel
