@@ -2,6 +2,9 @@
 Direct Schrödinger Evolution (DSE)
 ==================================
 
+A framework for history-dependent quantum dynamics through
+direct solution of the Schrödinger equation.
+
 DFT erases history. DSE remembers.
 
 Key Insight:
@@ -18,11 +21,11 @@ Theoretical Background:
   require history-dependent treatment.
 
 Key Results:
-  - γ_memory = 1.216 (46.7% of correlations are non-Markovian)
-  - Path dependence: ΔΛ = 1.59 (adsorption order)
-  - Reaction sequence: ΔΛ = 2.18
-  - Thermal path dependence: ΔΛ(T=50K) = 2.26
-  - Standard DFT cannot distinguish these paths (ΔΛ ≡ 0)
+  - gamma_memory = 1.216 (46.7% of correlations are non-Markovian)
+  - Path dependence: 1.59 (adsorption order matters)
+  - Reaction sequence: 2.18 (A->B->C differs from A->C->B)
+  - Thermal path dependence: 2.26 (heating/cooling history matters)
+  - Standard DFT cannot distinguish these paths (history-blind)
 
 Structure (Refactored):
   memory_dft/
