@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memory-dft"
-version = "0.2.0"
-description = "History-Dependent Density Functional Theory based on H-CSP/Λ³ Theory"
+version = "0.4.0"
+description = "Direct Schrödinger Evolution (DSE) - First-Principles History-Dependent Quantum Dynamics"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -13,14 +13,16 @@ authors = [
     {name = "Tamaki Iizumi"}
 ]
 keywords = [
+    "direct-schrodinger-evolution",
+    "DSE",
     "density-functional-theory",
     "DFT",
     "memory-kernel",
     "non-markovian",
     "quantum-chemistry",
     "materials-science",
-    "H-CSP",
-    "Lambda3"
+    "path-dependence",
+    "history-dependent"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -39,6 +41,7 @@ requires-python = ">=3.9"
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
+    "typer>=0.9.0",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +60,9 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.0.0",
 ]
+
+[project.scripts]
+memory-dft = "cli:main"
 
 [project.urls]
 Homepage = "https://github.com/miosync-masa/lambda3-memory-dft"
