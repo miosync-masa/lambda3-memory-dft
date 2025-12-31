@@ -1,14 +1,15 @@
 """
-Memory-DFT: History-Dependent Density Functional Theory
-=======================================================
+Direct Schrödinger Evolution (DSE)
+==================================
 
-A framework for incorporating memory effects into density
-functional theory calculations, capturing path-dependent
-phenomena that standard DFT cannot describe.
+A framework for history-dependent quantum dynamics through
+direct solution of the Schrödinger equation.
+
+DFT erases history. DSE remembers.
 
 Key Insight:
   Standard DFT: E[ρ(r)]        - Same structure = Same energy
-  Memory-DFT:   E[ρ(r), history] - Different history = Different energy
+  DSE:          E[ψ(t)]        - Different history = Different energy
 
 Theoretical Background:
   Correlation decomposition by distance filtering:
@@ -23,6 +24,7 @@ Key Results:
   - γ_memory = 1.216 (46.7% of correlations are non-Markovian)
   - Path dependence: ΔΛ = 1.59 (adsorption order)
   - Reaction sequence: ΔΛ = 2.18
+  - Thermal path dependence: ΔΛ(T=50K) = 2.26
   - Standard DFT cannot distinguish these paths (ΔΛ ≡ 0)
 
 Structure:
@@ -37,7 +39,8 @@ Structure:
   │   ├── lanczos_memory.py     # Lanczos + memory
   │   ├── time_evolution.py     # Time evolution
   │   ├── memory_indicators.py  # Memory quantification (ΔO, M(t), γ)
-  │   └── chemical_reaction.py  # Surface chemistry solver
+  │   ├── chemical_reaction.py  # Surface chemistry solver
+  │   └── thermal_dse.py        # Finite-temperature DSE ★NEW
   ├── physics/
   │   ├── lambda3_bridge.py     # Stability diagnostics
   │   └── vorticity.py          # γ decomposition
@@ -50,10 +53,12 @@ Structure:
 Reference:
   Lie & Fullwood, PRL 135, 230204 (2025)
 
+DOI: 10.5281/zenodo.18095869
+
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Core components
 from .core.memory_kernel import (
@@ -119,6 +124,15 @@ from .solvers.chemical_reaction import (
     ReactionEvent,
     ReactionPath,
     PathResult
+)
+
+from .solvers.thermal_dse import (
+    ThermalDSESolver,
+    thermal_expectation,
+    thermal_expectation_zero_T,
+    compute_entropy,
+    T_to_beta,
+    beta_to_T
 )
 
 # Physics
@@ -215,6 +229,14 @@ __all__ = [
     'ReactionEvent',
     'ReactionPath',
     'PathResult',
+    
+    # Solvers - Thermal DSE
+    'ThermalDSESolver',
+    'thermal_expectation',
+    'thermal_expectation_zero_T',
+    'compute_entropy',
+    'T_to_beta',
+    'beta_to_T',
     
     # Physics
     'Lambda3Calculator',
