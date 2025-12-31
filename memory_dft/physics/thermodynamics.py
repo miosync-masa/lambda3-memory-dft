@@ -13,10 +13,13 @@ Functions:
 These functions support finite-temperature DSE simulations
 where thermal path dependence can be detected.
 
-Key Insight:
-  Same final temperature, different heating/cooling history
-  → Different quantum outcomes (Memory-DFT captures this)
-  → DFT sees no difference (ΔΛ ≡ 0)
+Key insight:
+  - Path A: 50K -> 300K -> 50K (heat then cool)
+  - Path B: 50K -> 10K -> 300K -> 50K (cool then heat then cool)
+  - Same final temperature (50K)
+  - Different quantum history
+  - Memory-DFT detects path dependence
+  - Standard DFT sees no difference
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
