@@ -1,12 +1,14 @@
-# PyDSE - Python Direct Schrödinger Evolution
+# Direct Schrödinger Evolution (DSE)
 
-[![Tests](https://github.com/miosync-masa/pydse/actions/workflows/test.yml/badge.svg)](https://github.com/miosync-masa/pydse/actions/workflows/test.yml)
-[![PyPI version](https://badge.fury.io/py/pydse.svg)](https://badge.fury.io/py/pydse)
+[![Tests](https://github.com/miosync-masa/lambda3-memory-dft/actions/workflows/test.yml/badge.svg)](https://github.com/miosync-masa/lambda3-memory-dft/actions/workflows/test.yml)
+[![PyPI version](https://badge.fury.io/py/memory-dft.svg)](https://badge.fury.io/py/memory-dft)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18095869.svg)](https://doi.org/10.5281/zenodo.18095869)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **First-Principles History-Dependent Quantum Dynamics**
+
+> *Why "memory-dft"? Historical naming. The physics goes far beyond DFT.*
 
 > *"Standard DFT erases history by construction. DSE retains it."*
 
@@ -75,8 +77,8 @@ This is why we added the **Exclusion Kernel** in v0.4.0.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                             PyDSE v0.4.0                            │
-│              (Python Direct Schrödinger Evolution)                  │
+│                     Direct Schrödinger Evolution                    │
+│                           memory-dft v0.4.0                         │
 │         ~ First-Principles History-Dependent Dynamics ~             │
 └─────────────────────────────────────────────────────────────────────┘
 
@@ -219,21 +221,21 @@ Same final structure. **Different quantum outcomes.**
 
 ### From PyPI
 ```bash
-pip install pydse
+pip install memory-dft
 ```
 
 ### From Source
 ```bash
-git clone https://github.com/miosync-masa/pydse.git
-cd pydse
+git clone https://github.com/miosync-masa/lambda3-memory-dft.git
+cd lambda3-memory-dft
 pip install -e ".[dev]"
 ```
 
 ### Google Colab
 ```python
-!git clone https://github.com/miosync-masa/pydse.git
+!git clone https://github.com/miosync-masa/lambda3-memory-dft.git
 import sys
-sys.path.insert(0, '/content/pydse')
+sys.path.insert(0, '/content/lambda3-memory-dft')
 ```
 
 ---
@@ -243,7 +245,7 @@ sys.path.insert(0, '/content/pydse')
 ### Basic DSE with 4-Component Kernel
 
 ```python
-from pydse import (
+from memory_dft import (
     CompositeMemoryKernel,
     KernelWeights,
     HistoryManager,
@@ -278,7 +280,7 @@ psi = solver.evolve(H, psi0, t=0.0, dt=0.1)
 ### Path Comparison
 
 ```python
-from pydse import ChemicalReactionSolver, ReactionPath
+from memory_dft import ChemicalReactionSolver, ReactionPath
 
 solver = ChemicalReactionSolver(n_sites=4, use_gpu=True)
 
@@ -302,7 +304,7 @@ print(f"ΔΛ = {comparison['delta_lambda']:.3f}")  # → 1.594 (DFT: 0)
 ### Compression Hysteresis (Exclusion Kernel)
 
 ```python
-from pydse import RepulsiveMemoryKernel
+from memory_dft import RepulsiveMemoryKernel
 import numpy as np
 
 kernel = RepulsiveMemoryKernel(
@@ -330,7 +332,7 @@ for t in np.arange(2, 5, 0.1):
 ## Project Structure
 
 ```
-pydse/
+memory_dft/
 ├── core/
 │   ├── memory_kernel.py      # 4-component kernel (field/phys/chem/exclusion)
 │   ├── repulsive_kernel.py   # Detailed compression tracking
@@ -447,10 +449,10 @@ Result: γ_memory = 1.216 (46.7%) shows that realistic systems **violate the Mar
 ## Citation
 
 ```bibtex
-@software{pydse,
+@software{memory_dft,
   author       = {Iizumi, Masamichi and Iizumi, Tamaki},
-  title        = {{PyDSE: Python Direct Schrödinger Evolution for
-                   First-Principles History-Dependent Dynamics}},
+  title        = {{Direct Schrödinger Evolution: First-Principles
+                   History-Dependent Quantum Dynamics}},
   year         = {2024},
   publisher    = {Zenodo},
   version      = {0.4.0},
