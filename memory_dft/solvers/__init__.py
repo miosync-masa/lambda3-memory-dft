@@ -27,3 +27,14 @@ from .chemical_reaction import (
     ReactionPath,
     PathResult
 )
+
+from .thermal_dse import (
+    ThermalDSESolver,
+    thermal_expectation,
+    thermal_expectation_zero_T,
+    compute_entropy,
+    T_to_beta,
+    beta_to_T,
+    run_thermal_path_test,
+    run_chirality_test
+)
