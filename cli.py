@@ -214,17 +214,19 @@ def compare(
     output: Optional[Path] = typer.Option(None, "-o", "--output", help="Output JSON file"),
 ):
     """
-    Compare two evolution paths (DSE core feature!).
+    Compare two evolution paths (Hubbard model demo).
     
     This demonstrates that different paths to the same final state
-    yield different quantum outcomes - something DFT cannot capture.
+    yield different quantum outcomes - something memoryless approaches cannot capture.
+    
+    For real DFT comparison, use 'dft-compare' command.
     
     Example:
         memory-dft compare --path1 "A,B" --path2 "B,A"
     """
     print_banner()
     
-    typer.echo("🔀 Path Comparison (DSE Core Feature)")
+    typer.echo("🔀 Path Comparison (Hubbard Model Demo)")
     typer.echo("─" * 50)
     typer.echo(f"  Path 1: {path1}")
     typer.echo(f"  Path 2: {path2}")
@@ -300,20 +302,20 @@ def compare(
     diff_mem = abs(results[path_names[0]]['mem'] - results[path_names[1]]['mem'])
     
     typer.echo(f"\n  {path_names[0]}:")
-    typer.echo(f"    Standard: λ = {results[path_names[0]]['std']:.4f}")
-    typer.echo(f"    Memory:   λ = {results[path_names[0]]['mem']:.4f}")
+    typer.echo(f"    Memoryless:  λ = {results[path_names[0]]['std']:.4f}")
+    typer.echo(f"    With Memory: λ = {results[path_names[0]]['mem']:.4f}")
     
     typer.echo(f"\n  {path_names[1]}:")
-    typer.echo(f"    Standard: λ = {results[path_names[1]]['std']:.4f}")
-    typer.echo(f"    Memory:   λ = {results[path_names[1]]['mem']:.4f}")
+    typer.echo(f"    Memoryless:  λ = {results[path_names[1]]['std']:.4f}")
+    typer.echo(f"    With Memory: λ = {results[path_names[1]]['mem']:.4f}")
     
     typer.echo(f"\n  ═══════════════════════════════════════")
-    typer.echo(f"  |Δλ| Standard (DFT):  {diff_std:.6f}")
-    typer.echo(f"  |Δλ| Memory (DSE):    {diff_mem:.4f}")
+    typer.echo(f"  |Δλ| Memoryless:   {diff_std:.6f}")
+    typer.echo(f"  |Δλ| With Memory:  {diff_mem:.4f}")
     
     if diff_std < 1e-6:
-        typer.echo(f"\n  🎯 DFT: Cannot distinguish paths! (Δλ ≈ 0)")
-        typer.echo(f"  🎯 DSE: REVEALS difference! (Δλ = {diff_mem:.4f})")
+        typer.echo(f"\n  🎯 Memoryless: Cannot distinguish paths! (Δλ ≈ 0)")
+        typer.echo(f"  🎯 With Memory: REVEALS difference! (Δλ = {diff_mem:.4f})")
     else:
         ratio = diff_mem / diff_std
         typer.echo(f"\n  Amplification: {ratio:.1f}x")
