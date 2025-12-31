@@ -40,7 +40,8 @@ Structure:
   │   ├── time_evolution.py     # Time evolution
   │   ├── memory_indicators.py  # Memory quantification (ΔO, M(t), γ)
   │   ├── chemical_reaction.py  # Surface chemistry solver
-  │   └── thermal_dse.py        # Finite-temperature DSE ★NEW
+  │   ├── thermal_dse.py        # Finite-temperature DSE
+  │   └── ladder_dse.py         # 2D Ladder DSE ★NEW
   ├── physics/
   │   ├── lambda3_bridge.py     # Stability diagnostics
   │   └── vorticity.py          # γ decomposition
@@ -133,6 +134,13 @@ from .solvers.thermal_dse import (
     compute_entropy,
     T_to_beta,
     beta_to_T
+)
+
+from .solvers.ladder_dse import (
+    LadderDSESolver,
+    LatticeGeometry,
+    SpinOperators,
+    HamiltonianBuilder
 )
 
 # Physics
@@ -237,6 +245,12 @@ __all__ = [
     'compute_entropy',
     'T_to_beta',
     'beta_to_T',
+    
+    # Solvers - 2D Ladder DSE
+    'LadderDSESolver',
+    'LatticeGeometry',
+    'SpinOperators',
+    'HamiltonianBuilder',
     
     # Physics
     'Lambda3Calculator',
