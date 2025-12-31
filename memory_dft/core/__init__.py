@@ -4,25 +4,37 @@ Memory-DFT Core Components
 
 Foundation modules for Memory-DFT simulations.
 
+Memory Kernel Components (v0.4.0):
+  1. Field (PowerLaw): Long-range correlations
+  2. Phys (StretchedExp): Structural relaxation  
+  3. Chem (Step): Irreversible reactions
+  4. Exclusion: Distance-direction memory [NEW]
+
+The same distance r = 0.8 A means DIFFERENT things:
+  - Approaching: system is being compressed
+  - Departing: system is recovering
+DFT cannot distinguish. DSE can!
+
 Modules:
-  - memory_kernel: Non-Markovian memory kernels
-  - repulsive_kernel: Compression/repulsive memory
+  - memory_kernel: Non-Markovian memory kernels (4 components)
+  - repulsive_kernel: Detailed compression history tracking
   - history_manager: State history tracking
   - sparse_engine: Sparse Hamiltonian construction
   - hubbard_engine: Hubbard model implementation
-  - lattice: Lattice geometry definitions (NEW)
-  - operators: Spin operators (NEW)
-  - hamiltonian: Hamiltonian builders (NEW)
+  - lattice: Lattice geometry definitions
+  - operators: Spin operators
+  - hamiltonian: Hamiltonian builders
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
-# Memory Kernels
+# Memory Kernels (4 components: field, phys, chem, exclusion)
 from .memory_kernel import (
     MemoryKernelBase,
     PowerLawKernel,
     StretchedExpKernel,
     StepKernel,
+    ExclusionKernel,      # NEW in v0.4.0 - distance direction memory
     CompositeMemoryKernel,
     CompositeMemoryKernelGPU,
     KernelWeights,
@@ -102,11 +114,12 @@ from .hamiltonian import (
 # =========================================================================
 
 __all__ = [
-    # Memory Kernels
+    # Memory Kernels (4 components)
     'MemoryKernelBase',
     'PowerLawKernel',
     'StretchedExpKernel',
     'StepKernel',
+    'ExclusionKernel',      # NEW - distance direction memory
     'CompositeMemoryKernel',
     'CompositeMemoryKernelGPU',
     'KernelWeights',
