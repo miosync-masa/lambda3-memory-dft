@@ -13,7 +13,7 @@ Supported Models:
   - Hubbard:     H = -t Σ (c†_i c_j + h.c.) + U Σ n_i n_j
 
 Key Features:
-  - Separates H_kinetic and H_potential for Λ calculations
+  - Separates H_kinetic and H_potential for stability analysis
   - Vorticity/flux operator construction
   - Compatible with Memory-DFT solvers
 
@@ -105,7 +105,7 @@ class HamiltonianBuilder:
         """
         Heisenberg Hamiltonian split into K (kinetic) and V (potential).
         
-        For Λ = K/|V| calculations in Memory-DFT.
+        For stability parameter (K/|V|) calculations in Memory-DFT.
         
         H_K: XY part (spin hopping / kinetic-like)
         H_V: ZZ part (Ising / potential-like)
@@ -406,7 +406,7 @@ def build_hamiltonian(model: str,
         model: 'heisenberg', 'xy', 'xx', 'ising', 'kitaev', 'hubbard'
         geometry: Lattice geometry
         spin_ops: Spin operators (created if not provided)
-        split_KV: Return (H_K, H_V) tuple for Λ calculations
+        split_KV: Return (H_K, H_V) tuple for stability analysis
         **params: Model-specific parameters
         
     Returns:
@@ -490,7 +490,7 @@ if __name__ == "__main__":
     print(f"Hubbard: shape={H_hubbard.shape}, nnz={H_hubbard.nnz}")
     
     # K-V split
-    print("\n--- K-V Split (for Λ calculations) ---")
+    print("\n--- K-V Split (for stability analysis) ---")
     H_K, H_V = builder.heisenberg_KV(J=1.0)
     print(f"H_K: nnz={H_K.nnz}")
     print(f"H_V: nnz={H_V.nnz}")
