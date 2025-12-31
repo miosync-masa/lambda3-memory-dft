@@ -5,9 +5,10 @@ Memory-DFT Physics Components
 Physical analysis and diagnostic tools for Memory-DFT.
 
 Modules:
-  - lambda3_bridge: Λ stability diagnostics and H-CSP validation
-  - vorticity: γ decomposition and memory kernel extraction
-  - thermodynamics: Finite-temperature utilities (NEW)
+  - lambda3_bridge: Stability diagnostics and validation
+  - vorticity: Correlation decomposition and analysis
+  - thermodynamics: Finite-temperature utilities
+  - rdm: Two-particle reduced density matrix (NEW)
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
@@ -57,6 +58,23 @@ from .thermodynamics import (
     sample_thermal_state,
 )
 
+# Two-Particle Reduced Density Matrix (NEW)
+from .rdm import (
+    # Result container
+    RDM2Result,
+    # Core computation
+    compute_2rdm,
+    compute_2rdm_with_ops,
+    # Correlation analysis
+    compute_density_density_correlation,
+    compute_connected_correlation,
+    compute_correlation_matrix,
+    filter_by_distance,
+    # External interface
+    from_pyscf_rdm2,
+    to_pyscf_rdm2,
+)
+
 
 __all__ = [
     # Lambda3 / Stability
@@ -101,4 +119,15 @@ __all__ = [
     # Thermodynamics - States
     'thermal_density_matrix',
     'sample_thermal_state',
+    
+    # 2-RDM (NEW)
+    'RDM2Result',
+    'compute_2rdm',
+    'compute_2rdm_with_ops',
+    'compute_density_density_correlation',
+    'compute_connected_correlation',
+    'compute_correlation_matrix',
+    'filter_by_distance',
+    'from_pyscf_rdm2',
+    'to_pyscf_rdm2',
 ]
