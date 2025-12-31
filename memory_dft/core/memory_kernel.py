@@ -574,12 +574,19 @@ class CatalystMemoryKernel:
         self.tau_ads = tau_ads
         self.tau_react = tau_react
         self.events: List[CatalystEvent] = []
+        self.state_history: List[Tuple[float, float, np.ndarray]] = []
     
     def add_event(self, event: CatalystEvent):
         """Record a catalyst event."""
         self.events.append(event)
         if len(self.events) > 100:
             self.events = self.events[-100:]
+    
+    def add_state(self, t: float, lambda_val: float, psi: np.ndarray):
+        """Record state for overlap calculations."""
+        self.state_history.append((t, lambda_val, psi.copy()))
+        if len(self.state_history) > 100:
+            self.state_history = self.state_history[-100:]
     
     def compute_catalyst_memory(self, t: float) -> float:
         """Compute catalyst memory contribution."""
@@ -604,9 +611,32 @@ class CatalystMemoryKernel:
         
         return memory
     
+    def compute_memory_contribution(self, t: float, psi: np.ndarray) -> float:
+        """
+        Compute memory contribution (compatible with SimpleMemoryKernel API).
+        
+        Combines catalyst event memory with state overlap effects.
+        """
+        # Base catalyst memory from events
+        catalyst_mem = self.compute_catalyst_memory(t)
+        
+        # Add state overlap contribution if history available
+        overlap_contribution = 0.0
+        if len(self.state_history) > 0 and psi is not None:
+            for t_hist, lambda_hist, psi_hist in self.state_history[-10:]:
+                dt = t - t_hist
+                if dt <= 0:
+                    continue
+                overlap = abs(np.vdot(psi, psi_hist))**2
+                kernel = np.exp(-dt / self.tau_react)
+                overlap_contribution += self.eta * 0.5 * kernel * lambda_hist * overlap
+        
+        return catalyst_mem + overlap_contribution
+    
     def clear(self):
         """Clear event history."""
         self.events = []
+        self.state_history = []
 
 
 # =============================================================================
