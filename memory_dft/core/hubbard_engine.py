@@ -5,14 +5,16 @@ Hubbard Model Engine for Memory-DFT
 Hubbard model implementation for chemical memory tests.
 
 Hamiltonian:
-  H = -t Σ(c†_i c_j + h.c.) + U Σ n_i n_j + Σ V_i n_i
+  H = -t sum(c^dag_i c_j + h.c.) + U sum(n_i n_j) + sum(V_i n_i)
 
-Features:
-- Arbitrary L sites
-- Site-specific potentials (for adsorption/catalyst simulations)
-- Bond-length dependent hopping (t_eff ∝ 1/R)
-- 2-RDM computation for correlation analysis
-- Stability parameter computation (energy-density ratio)
+Chemical-specific features:
+  - Site-specific potentials (adsorption/catalyst modeling)
+  - Bond-length dependent hopping (reaction coordinate)
+  - External field coupling
+
+This is a thin wrapper around the core modules:
+  - core/operators.py: SpinOperators (operator construction)
+  - physics/rdm.py: compute_2rdm (2-RDM calculation)
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
@@ -43,19 +45,14 @@ class HubbardResult:
 
 class HubbardEngine:
     """
-    Hubbard model solver for arbitrary number of sites.
+    Hubbard model solver with chemistry-specific features.
     
-    Hamiltonian:
-      H = -t Σ(c†_i c_j + h.c.) + U Σ n_i n_j + h Σ n_i + Σ V_i n_i
+    This engine is specialized for chemical reaction simulations:
+      - Site potentials for adsorption sites
+      - Bond-length dependent hopping for reaction coordinates
+      - External field for bias/perturbation
     
-    The stability parameter is computed as:
-      λ = K / |V|
-    
-    where K is kinetic energy and V is potential energy.
-    This ratio indicates:
-      - λ < 1: Bound/stable regime
-      - λ ≈ 1: Critical regime
-      - λ > 1: Unbound/unstable regime
+    For general spin physics, use core/operators.py + core/hamiltonian.py
     
     Usage:
         engine = HubbardEngine(L=4)
@@ -70,29 +67,43 @@ class HubbardEngine:
             verbose: Print debug information
         """
         self.L = L
-        self.dim = 2**L
+        self.dim = 2 ** L
         self.verbose = verbose
+        
+        # Build operators (lightweight, no SpinOperators dependency for now)
         self._build_operators()
+        
+        # Cache for number operators
+        self._n_ops_cache: Optional[List] = None
         
         if self.verbose:
             print(f"HubbardEngine: L={L}, dim={self.dim}")
     
     def _build_operators(self):
-        """Build basic spin/fermion operators."""
-        self.I = sp.eye(2, format='csr')
-        self.Sp = sp.csr_matrix(np.array([[0, 1], [0, 0]], dtype=np.complex128))
-        self.Sm = sp.csr_matrix(np.array([[0, 0], [1, 0]], dtype=np.complex128))
-        self.n = sp.csr_matrix(np.array([[0, 0], [0, 1]], dtype=np.complex128))
-        self.Sz = sp.csr_matrix(np.array([[1, 0], [0, -1]], dtype=np.complex128) * 0.5)
+        """Build basic operators for Hubbard model."""
+        self.I = sp.eye(2, format='csr', dtype=np.complex128)
+        self.Sp = sp.csr_matrix([[0, 1], [0, 0]], dtype=np.complex128)
+        self.Sm = sp.csr_matrix([[0, 0], [1, 0]], dtype=np.complex128)
+        self.n = sp.csr_matrix([[0, 0], [0, 1]], dtype=np.complex128)
     
-    def _site_op(self, op, site: int):
-        """Build site operator via tensor product."""
+    def _site_op(self, op, site: int) -> sp.csr_matrix:
+        """Build operator acting on specific site."""
         ops = [self.I] * self.L
         ops[site] = op
         result = ops[0]
         for i in range(1, self.L):
             result = sp.kron(result, ops[i], format='csr')
         return result
+    
+    def _get_number_operators(self) -> List[sp.csr_matrix]:
+        """Get cached number operators for 2-RDM computation."""
+        if self._n_ops_cache is None:
+            self._n_ops_cache = [self._site_op(self.n, i) for i in range(self.L)]
+        return self._n_ops_cache
+    
+    # =========================================================================
+    # Hamiltonian Construction (Chemistry-specific)
+    # =========================================================================
     
     def build_hamiltonian(self, 
                           t: float = 1.0, 
@@ -101,7 +112,7 @@ class HubbardEngine:
                           site_potentials: Optional[List[float]] = None,
                           bond_lengths: Optional[List[float]] = None) -> sp.csr_matrix:
         """
-        Build the full Hubbard Hamiltonian.
+        Build the Hubbard Hamiltonian with chemistry features.
         
         Args:
             t: Hopping amplitude
@@ -110,14 +121,14 @@ class HubbardEngine:
             site_potentials: Site-specific potentials [V_0, V_1, ...]
                              for modeling adsorption sites
             bond_lengths: Bond lengths for position-dependent hopping
-                          (t_eff = t / R for distance-dependent coupling)
+                          (t_eff = t / R for reaction coordinate)
         
         Returns:
             Sparse Hamiltonian matrix in CSR format
         """
-        H = None
+        H = sp.csr_matrix((self.dim, self.dim), dtype=np.complex128)
         
-        # Kinetic (hopping) terms
+        # Kinetic (hopping) terms: -t sum(c^dag_i c_j + h.c.)
         for i in range(self.L - 1):
             j = i + 1
             
@@ -131,23 +142,22 @@ class HubbardEngine:
             Sp_j = self._site_op(self.Sp, j)
             Sm_j = self._site_op(self.Sm, j)
             
-            term = -t_eff * (Sp_i @ Sm_j + Sm_i @ Sp_j)
-            H = term if H is None else H + term
+            H = H - t_eff * (Sp_i @ Sm_j + Sm_i @ Sp_j)
         
-        # Interaction terms (nearest-neighbor)
+        # Interaction terms: U sum(n_i n_j) nearest-neighbor
         for i in range(self.L - 1):
             j = i + 1
             n_i = self._site_op(self.n, i)
             n_j = self._site_op(self.n, j)
-            H = H + U * n_i @ n_j
+            H = H + U * (n_i @ n_j)
         
-        # Global external field
+        # Global external field: h sum(n_i)
         if abs(h) > 1e-10:
             for i in range(self.L):
                 n_i = self._site_op(self.n, i)
                 H = H + h * n_i
         
-        # Site-specific potentials (for catalyst/adsorption modeling)
+        # Site-specific potentials: sum(V_i n_i)
         if site_potentials is not None:
             for i, V_i in enumerate(site_potentials):
                 if i < self.L and abs(V_i) > 1e-10:
@@ -166,6 +176,10 @@ class HubbardEngine:
         """Build potential (interaction + field) Hamiltonian only."""
         return self.build_hamiltonian(t=0, U=U, h=h, site_potentials=site_potentials)
     
+    # =========================================================================
+    # Ground State & Observables
+    # =========================================================================
+    
     def compute_ground_state(self, H: sp.csr_matrix) -> Tuple[float, np.ndarray]:
         """
         Compute ground state via sparse diagonalization.
@@ -180,22 +194,12 @@ class HubbardEngine:
                                     H_K: sp.csr_matrix, 
                                     H_V: sp.csr_matrix) -> float:
         """
-        Compute the dimensionless stability parameter.
-        
-        λ = |⟨K⟩| / |⟨V⟩|
+        Compute the dimensionless stability parameter K/|V|.
         
         Physical interpretation:
-        - λ < 1: Kinetic energy dominated by binding → stable
-        - λ ≈ 1: Balance between kinetic and potential → critical
-        - λ > 1: Kinetic exceeds binding → unstable/unbound
-        
-        Args:
-            psi: Quantum state
-            H_K: Kinetic Hamiltonian
-            H_V: Potential Hamiltonian
-        
-        Returns:
-            Stability parameter value
+          - < 1: Kinetic dominated by binding (stable)
+          - ~ 1: Critical balance
+          - > 1: Kinetic exceeds binding (unstable)
         """
         K = float(np.real(np.vdot(psi, H_K @ psi)))
         V = float(np.real(np.vdot(psi, H_V @ psi)))
@@ -205,31 +209,32 @@ class HubbardEngine:
         
         return abs(K) / abs(V)
     
-    # Alias for backward compatibility
+    # Backward compatibility alias
     compute_lambda = compute_stability_parameter
+    
+    # =========================================================================
+    # 2-RDM Computation (delegates to physics/rdm.py)
+    # =========================================================================
     
     def compute_2rdm(self, psi: np.ndarray) -> np.ndarray:
         """
         Compute two-particle reduced density matrix.
         
-        The 2-RDM contains all two-body correlations and is
-        essential for analyzing non-Markovian memory effects.
+        Delegates to physics/rdm.py for the actual computation.
+        The 2-RDM encodes all two-body correlations.
         
         Returns:
             rdm2: Array of shape (L, L, L, L)
         """
-        rdm2 = np.zeros((self.L, self.L, self.L, self.L), dtype=np.float64)
+        # Import here to avoid circular imports
+        from memory_dft.physics.rdm import compute_2rdm
         
-        for i in range(self.L):
-            for j in range(self.L):
-                n_i = self._site_op(self.n, i)
-                n_j = self._site_op(self.n, j)
-                val = float(np.real(np.vdot(psi, (n_i @ n_j) @ psi)))
-                rdm2[i, i, j, j] = val
-                rdm2[i, j, i, j] = val * 0.5
-                rdm2[i, j, j, i] = -val * 0.5
-        
-        return rdm2
+        number_ops = self._get_number_operators()
+        return compute_2rdm(psi, self.L, number_ops=number_ops, method='diagonal')
+    
+    # =========================================================================
+    # Convenience Methods
+    # =========================================================================
     
     def compute_full(self, t: float = 1.0, U: float = 2.0, 
                      h: float = 0.0,
@@ -237,7 +242,7 @@ class HubbardEngine:
                      bond_lengths: Optional[List[float]] = None,
                      compute_rdm2: bool = False) -> HubbardResult:
         """
-        Perform complete calculation: H → ground state → stability.
+        Perform complete calculation: H -> ground state -> stability.
         
         This is the main entry point for single-shot calculations.
         
@@ -271,17 +276,17 @@ class HubbardEngine:
 # =============================================================================
 
 if __name__ == "__main__":
-    print("="*60)
+    print("=" * 60)
     print("HubbardEngine Test")
-    print("="*60)
+    print("=" * 60)
     
     for L in [4, 6, 8]:
         engine = HubbardEngine(L, verbose=True)
         result = engine.compute_full(t=1.0, U=2.0, compute_rdm2=True)
         
         print(f"  E = {result.energy:.6f}")
-        print(f"  λ = {result.lambda_val:.4f}")
+        print(f"  stability = {result.lambda_val:.4f}")
         print(f"  rdm2 shape = {result.rdm2.shape}")
         print()
     
-    print("✅ HubbardEngine test passed!")
+    print("HubbardEngine test passed!")
