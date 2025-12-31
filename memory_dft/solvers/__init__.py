@@ -1,4 +1,23 @@
-"""Memory-DFT Solvers"""
+"""
+Memory-DFT Solvers
+==================
+
+Numerical solvers for Memory-DFT simulations.
+
+Modules:
+  - lanczos_memory: Lanczos-based time evolution with memory
+  - time_evolution: General time evolution engine
+  - memory_indicators: Memory quantification metrics
+  - chemical_reaction: Surface chemistry solver
+
+Note:
+  ThermalDSESolver and LadderDSESolver have been refactored.
+  - Thermal functions: Use memory_dft.physics.thermodynamics
+  - Lattice/Operators/Hamiltonian: Use memory_dft.core.*
+  - Example code: See memory_dft.examples.*
+
+Author: Masamichi Iizumi, Tamaki Iizumi
+"""
 
 from .lanczos_memory import (
     MemoryLanczosSolver,
@@ -28,21 +47,64 @@ from .chemical_reaction import (
     PathResult
 )
 
-from .thermal_dse import (
-    ThermalDSESolver,
-    thermal_expectation,
-    thermal_expectation_zero_T,
-    compute_entropy,
-    T_to_beta,
-    beta_to_T,
-    run_thermal_path_test,
-    run_chirality_test
-)
+# =========================================================================
+# REMOVED (Refactored to core/ and physics/)
+# =========================================================================
+#
+# The following imports have been removed:
+#
+# from .thermal_dse import (
+#     ThermalDSESolver,           # → examples/thermal_path.py
+#     thermal_expectation,        # → physics/thermodynamics.py
+#     thermal_expectation_zero_T, # → physics/thermodynamics.py
+#     compute_entropy,            # → physics/thermodynamics.py
+#     T_to_beta,                  # → physics/thermodynamics.py
+#     beta_to_T,                  # → physics/thermodynamics.py
+# )
+#
+# from .ladder_dse import (
+#     LadderDSESolver,            # → examples/ladder_2d.py
+#     LatticeGeometry,            # → core/lattice.py
+#     SpinOperators,              # → core/operators.py
+#     HamiltonianBuilder,         # → core/hamiltonian.py
+# )
+#
+# Migration guide:
+#   # OLD
+#   from memory_dft.solvers import T_to_beta, LatticeGeometry
+#   
+#   # NEW
+#   from memory_dft.physics import T_to_beta
+#   from memory_dft.core import LatticeGeometry
+#   
+#   # Or simply
+#   from memory_dft import T_to_beta, LatticeGeometry
+#
+# =========================================================================
 
-from .ladder_dse import (
-    LadderDSESolver,
-    LatticeGeometry,
-    SpinOperators,
-    HamiltonianBuilder,
-    run_full_test as run_ladder_dse_test
-)
+
+__all__ = [
+    # Lanczos
+    'MemoryLanczosSolver',
+    'AdaptiveMemorySolver',
+    'lanczos_expm_multiply',
+    
+    # Time Evolution
+    'TimeEvolutionEngine',
+    'EvolutionConfig',
+    'EvolutionResult',
+    'quick_evolve',
+    
+    # Memory Indicators
+    'MemoryIndicator',
+    'MemoryMetrics',
+    'HysteresisAnalyzer',
+    
+    # Chemical Reaction
+    'ChemicalReactionSolver',
+    'SurfaceHamiltonianEngine',
+    'LanczosEvolver',
+    'ReactionEvent',
+    'ReactionPath',
+    'PathResult',
+]
