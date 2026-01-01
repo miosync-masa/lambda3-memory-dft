@@ -48,12 +48,14 @@ class ThermalDSERunner:
     """
     
     def __init__(self, n_sites: int = 4, t_hop: float = 1.0, U_int: float = 2.0,
-                 n_eigenstates: int = 14, verbose: bool = True):
+                 n_eigenstates: int = 14, energy_scale: float = 0.1,
+                 verbose: bool = True):
         self.n_sites = n_sites
         self.dim = 2 ** n_sites
         self.t_hop = t_hop
         self.U_int = U_int
         self.n_eigenstates = min(n_eigenstates, self.dim - 2)
+        self.energy_scale = energy_scale  # Energy scale for β calculation
         self.verbose = verbose
         
         # Boltzmann constant in eV/K
@@ -129,7 +131,7 @@ class ThermalDSERunner:
         """Convert temperature to inverse temperature β."""
         if T_kelvin <= 0:
             return float('inf')
-        return self.t_hop / (self.K_B_EV * T_kelvin)
+        return self.energy_scale / (self.K_B_EV * T_kelvin)
     
     def boltzmann_weights(self, beta: float) -> np.ndarray:
         """Compute Boltzmann weights exp(-βE_n)/Z."""
@@ -351,6 +353,8 @@ def thermal(
     n_sites: int = typer.Option(4, "--sites", "-n", help="Number of lattice sites"),
     t_hop: float = typer.Option(1.0, "-t", help="Hopping parameter"),
     u_int: float = typer.Option(2.0, "-U", help="Interaction strength"),
+    energy_scale: float = typer.Option(0.1, "--energy-scale", "-E",
+                                        help="Energy scale for β (eV). 0.1=organic, 1.0=metal"),
     n_states: int = typer.Option(14, "--states", help="Number of eigenstates"),
     steps: int = typer.Option(5, "--steps", help="Steps per temperature segment"),
     output: Optional[Path] = typer.Option(None, "-o", "--output", 
@@ -369,6 +373,7 @@ def thermal(
     print_section("Thermal-DSE Path Comparison", "🌡️")
     print_key_value("System", f"{n_sites}-site Hubbard model")
     print_key_value("Parameters", f"t={t_hop}, U={u_int}")
+    print_key_value("Energy scale", f"{energy_scale} eV")
     print_key_value("Eigenstates", str(n_states))
     print_key_value("T_high", f"{t_high} K")
     print_key_value("T_low", f"{t_low} K")  
@@ -383,6 +388,7 @@ def thermal(
             t_hop=t_hop,
             U_int=u_int,
             n_eigenstates=n_states,
+            energy_scale=energy_scale,
             verbose=True
         )
     except Exception as e:
