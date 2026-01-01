@@ -1049,7 +1049,7 @@ def thermal(
     t_final: float = typer.Option(200.0, "--T-final", help="Final temperature (K)"),
     sites: int = typer.Option(4, "-L", "--sites", help="Number of sites"),
     u: float = typer.Option(2.0, "-U", help="Hubbard U"),
-    steps: int = typer.Option(10, "-n", "--steps", help="Steps per temperature segment"),
+    steps: int = typer.Option(5, "-n", "--steps", help="Steps per temperature"),
     output: Optional[Path] = typer.Option(None, "-o", "--output", help="Output JSON file"),
 ):
     """
@@ -1073,96 +1073,86 @@ def thermal(
     typer.echo(f"  U/t:      {u}")
     typer.echo()
     
-    # Import from memory_dft package (GitHub version has all files)
+    # Import ThermalPathSolver from examples
     try:
-        from memory_dft.physics.thermodynamics import (
-            K_B_EV, T_to_beta, boltzmann_weights, compute_entropy
-        )
-        from memory_dft.core.hubbard_engine import HubbardEngine
+        from memory_dft.examples.thermal_path import ThermalPathSolver
     except ImportError as e:
-        typer.echo(f"❌ Error importing modules: {e}", err=True)
+        typer.echo(f"❌ Error importing ThermalPathSolver: {e}", err=True)
         typer.echo("   Make sure memory_dft package is installed: pip install -e .", err=True)
         raise typer.Exit(1)
     
-    # Build Hubbard model
+    # Build and diagonalize
     typer.echo("Building Hubbard model...")
-    engine = HubbardEngine(L=sites, verbose=False)
-    result = engine.compute_full(t=1.0, U=u)
-    eigenvalues = engine.eigenvalues
-    eigenvectors = engine.eigenvectors
+    solver = ThermalPathSolver(n_sites=sites, verbose=False)
+    solver.build_hubbard(t_hop=1.0, U_int=u)
     
-    typer.echo(f"  Hilbert dim: {engine.dim}")
-    typer.echo(f"  E_0: {eigenvalues[0]:.4f}")
+    n_states = min(50, solver.dim - 2)
+    solver.diagonalize(n_eigenstates=n_states)
     
-    def compute_thermal_lambda(T):
-        """Compute thermal average of Λ at temperature T."""
-        beta = T_to_beta(T)
-        weights = boltzmann_weights(eigenvalues, beta)
-        
-        lambdas = []
-        for i, E in enumerate(eigenvalues):
-            K = abs(E - eigenvalues[0])
-            V_eff = abs(eigenvalues[0]) + 0.1
-            lam = K / V_eff if V_eff > 0 else 0
-            lambdas.append(lam)
-        
-        lambda_avg = np.sum(weights * np.array(lambdas))
-        entropy = compute_entropy(weights)
-        return lambda_avg, entropy
+    typer.echo(f"  Hilbert dim: {solver.dim}")
+    typer.echo(f"  States: {n_states}")
+    typer.echo(f"  E_0: {solver.eigenvalues[0]:.4f}")
     
-    # Path 1: T_low → T_high → T_final
+    # Build temperature paths
+    # Path 1: T_low → T_high → T_final (Heat first)
+    path1_temps = (
+        list(np.linspace(t_low, t_high, steps)) + 
+        list(np.linspace(t_high, t_final, steps))
+    )
+    
+    # Path 2: T_high → T_low → T_final (Cool first)
+    path2_temps = (
+        list(np.linspace(t_high, t_low, steps)) + 
+        list(np.linspace(t_low, t_final, steps))
+    )
+    
+    # Run Path 1
     typer.echo()
     typer.echo("📍 Path 1: Heat first (T_low → T_high → T_final)")
+    result1 = solver.evolve_temperature_path(path1_temps, dt=0.1, steps_per_T=3)
+    lambda1 = result1['lambda_final']
+    typer.echo(f"  Final Λ: {lambda1:.6f}")
     
-    path1_temps = list(np.linspace(t_low, t_high, steps)) + list(np.linspace(t_high, t_final, steps))
-    path1_lambdas = [compute_thermal_lambda(T)[0] for T in path1_temps]
-    lambda1_final = path1_lambdas[-1]
-    typer.echo(f"  Final Λ: {lambda1_final:.6f}")
-    
-    # Path 2: T_high → T_low → T_final
+    # Run Path 2
     typer.echo()
     typer.echo("📍 Path 2: Cool first (T_high → T_low → T_final)")
-    
-    path2_temps = list(np.linspace(t_high, t_low, steps)) + list(np.linspace(t_low, t_final, steps))
-    path2_lambdas = [compute_thermal_lambda(T)[0] for T in path2_temps]
-    lambda2_final = path2_lambdas[-1]
-    typer.echo(f"  Final Λ: {lambda2_final:.6f}")
+    result2 = solver.evolve_temperature_path(path2_temps, dt=0.1, steps_per_T=3)
+    lambda2 = result2['lambda_final']
+    typer.echo(f"  Final Λ: {lambda2:.6f}")
     
     # Compare
-    delta_eq = abs(lambda1_final - lambda2_final)
-    
-    # Memory effect from path variance
-    mem_1 = 0.05 * np.std(path1_lambdas)
-    mem_2 = 0.05 * np.std(path2_lambdas)
-    lambda1_mem = lambda1_final + mem_1
-    lambda2_mem = lambda2_final + mem_2
-    delta_mem = abs(lambda1_mem - lambda2_mem)
+    delta_lambda = abs(lambda1 - lambda2)
     
     typer.echo()
     typer.echo("=" * 50)
     typer.echo("📊 THERMAL PATH COMPARISON")
     typer.echo("=" * 50)
     typer.echo(f"\n  Same final temperature: {t_final} K")
-    typer.echo(f"\n  Equilibrium (no memory):")
-    typer.echo(f"    Path 1 Λ: {lambda1_final:.6f}")
-    typer.echo(f"    Path 2 Λ: {lambda2_final:.6f}")
-    typer.echo(f"    |ΔΛ|:    {delta_eq:.6f}")
-    typer.echo(f"\n  With Memory Kernel:")
-    typer.echo(f"    Path 1 Λ: {lambda1_mem:.6f}")
-    typer.echo(f"    Path 2 Λ: {lambda2_mem:.6f}")
-    typer.echo(f"    |ΔΛ|:    {delta_mem:.6f}")
+    typer.echo(f"\n  Path 1 (heat first): Λ = {lambda1:.6f}")
+    typer.echo(f"  Path 2 (cool first): Λ = {lambda2:.6f}")
+    typer.echo(f"\n  |ΔΛ| (DSE):  {delta_lambda:.6f}")
+    typer.echo(f"  |ΔΛ| (DFT):  0.000000  (by construction)")
     
-    if delta_eq < 1e-6 and delta_mem > 1e-4:
+    if delta_lambda > 0.001:
         typer.echo()
-        typer.echo("  🎯 THERMAL PATH DEPENDENCE!")
-        typer.echo("  → Equilibrium: Same T → Same Λ (ΔΛ ≈ 0)")
-        typer.echo("  → With Memory: Different history → Different Λ")
+        typer.echo("  🎯 THERMAL PATH DEPENDENCE DETECTED!")
+        typer.echo("  → Same final T, different history → Different Λ")
+        typer.echo("  → DFT predicts ΔΛ ≡ 0, DSE reveals ΔΛ ≠ 0")
+    elif delta_lambda > 1e-6:
+        typer.echo()
+        typer.echo("  ⚠️ Weak thermal path dependence detected")
+    else:
+        typer.echo()
+        typer.echo("  ℹ️ Path dependence is minimal (try more steps)")
     
     results = {
         'temperatures': {'T_high': t_high, 'T_low': t_low, 'T_final': t_final},
-        'path1': {'lambda_final': lambda1_final, 'lambda_with_memory': lambda1_mem},
-        'path2': {'lambda_final': lambda2_final, 'lambda_with_memory': lambda2_mem},
-        'comparison': {'delta_eq': delta_eq, 'delta_mem': delta_mem}
+        'path1': {'temps': path1_temps, 'lambda_final': lambda1},
+        'path2': {'temps': path2_temps, 'lambda_final': lambda2},
+        'comparison': {
+            'delta_lambda_DSE': delta_lambda,
+            'delta_lambda_DFT': 0.0,
+        }
     }
     
     if output:
