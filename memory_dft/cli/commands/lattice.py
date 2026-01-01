@@ -64,10 +64,10 @@ class LatticeRunner:
         except ImportError as e:
             raise ImportError(f"Could not import modules: {e}")
         
-        # Initialize lattice
-        self.lattice = self.LatticeGeometry2D(lx, ly, boundary='periodic')
+        # Initialize lattice (periodic boundary conditions)
+        self.lattice = self.LatticeGeometry2D(lx, ly, periodic_x=True, periodic_y=True)
         self.ops = self.SpinOperators(self.n_sites)
-        self.builder = self.HamiltonianBuilder(self.ops)
+        self.builder = self.HamiltonianBuilder(self.lattice, self.ops)  # geometry + ops
     
     def build_hamiltonian(self, 
                           j: float = 1.0,
@@ -76,18 +76,17 @@ class LatticeRunner:
                           kz: float = 0.3,
                           h_field: float = 0.5) -> Any:
         """Build Hamiltonian based on model type."""
-        bonds = self.lattice.get_bonds()
-        
+        # HamiltonianBuilder uses geometry internally for bonds
         if self.model == 'heisenberg':
-            return self.builder.heisenberg(bonds, J=j)
+            return self.builder.heisenberg(J=j)
         elif self.model == 'xy':
-            return self.builder.xy(bonds, J=j)
+            return self.builder.xy(J=j)
         elif self.model == 'kitaev':
-            return self.builder.kitaev(bonds, Kx=kx, Ky=ky, Kz=kz)
+            return self.builder.kitaev_rect(Kx=kx, Ky=ky, Kz_diag=kz)
         elif self.model == 'ising':
-            return self.builder.transverse_ising(bonds, J=j, h=h_field)
+            return self.builder.ising(J=j, h=h_field)
         elif self.model == 'hubbard':
-            return self.builder.hubbard_spin(bonds, J=j)
+            return self.builder.hubbard_spin(t=j, U=2.0)
         else:
             raise ValueError(f"Unknown model: {self.model}")
     
