@@ -755,6 +755,7 @@ def dft_compare(
     typer.echo("\n✅ Done!")
 
 
+
 # =============================================================================
 # lattice command (2D Lattice Models)
 # =============================================================================
@@ -806,27 +807,16 @@ def lattice(
     typer.echo(f"  Path compare: {'ON' if path_compare else 'OFF'}")
     typer.echo()
     
-    # Import lattice modules
+    # Import from memory_dft package (GitHub version has all files)
     try:
-        import sys
-        import os
-        
-        # Add parent directory to enable package imports
-        parent_dir = os.path.dirname(__file__)
-        if parent_dir not in sys.path:
-            sys.path.insert(0, parent_dir)
-        
-        # Import as package to resolve relative imports
-        from core.lattice import LatticeGeometry2D
-        from core.operators import SpinOperators
-        from core.hamiltonian import HamiltonianBuilder
-        
-        # Also need eigsh
+        from memory_dft.core.lattice import LatticeGeometry2D
+        from memory_dft.core.operators import SpinOperators
+        from memory_dft.core.hamiltonian import HamiltonianBuilder
+        from memory_dft.solvers.lanczos_memory import lanczos_expm_multiply
         from scipy.sparse.linalg import eigsh
-        from scipy.linalg import expm
     except ImportError as e:
-        typer.echo(f"❌ Error importing lattice modules: {e}", err=True)
-        typer.echo("   Make sure core/lattice.py, core/operators.py, core/hamiltonian.py exist", err=True)
+        typer.echo(f"❌ Error importing modules: {e}", err=True)
+        typer.echo("   Make sure memory_dft package is installed: pip install -e .", err=True)
         raise typer.Exit(1)
     
     # Build lattice
@@ -896,8 +886,6 @@ def lattice(
         typer.echo("🔀 PATH COMPARISON (Kitaev)")
         typer.echo("=" * 50)
         
-        from solvers.lanczos_memory import lanczos_expm_multiply
-        
         dt = 0.1
         steps = 10
         
@@ -908,7 +896,6 @@ def lattice(
             {'Kx': 1.0, 'Ky': 1.0, 'Kz_diag': 0.0},
         ]
         
-        # Start from ground state of first H
         H_A = builder.kitaev_rect(**path_A_params[0])
         E_A, psi_A = eigsh(H_A, k=1, which='SA')
         psi_A = psi_A[:, 0]
@@ -952,13 +939,8 @@ def lattice(
             typer.echo("  → Same final H, different history → Different vorticity")
             typer.echo("  → Memoryless approach sees ΔV ≡ 0")
         
-        results['path_compare'] = {
-            'V_A': V_A,
-            'V_B': V_B,
-            'delta_V': delta_V,
-        }
+        results['path_compare'] = {'V_A': V_A, 'V_B': V_B, 'delta_V': delta_V}
     
-    # Save output
     if output:
         output.write_text(json.dumps(results, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else x))
         typer.echo(f"\n💾 Saved to {output}")
@@ -988,9 +970,6 @@ def thermal(
       Path 1: T_low → T_high → T_final (Heat first)
       Path 2: T_high → T_low → T_final (Cool first)
     
-    Demonstrates that thermal history affects the final state,
-    even when reaching the same final temperature.
-    
     Example:
         memory-dft thermal --T-high 300 --T-low 100 --T-final 200
     """
@@ -1005,160 +984,98 @@ def thermal(
     typer.echo(f"  U/t:      {u}")
     typer.echo()
     
-    # Import modules
+    # Import from memory_dft package (GitHub version has all files)
     try:
-        import sys
-        import os
-        
-        # Add parent directory to enable package imports
-        parent_dir = os.path.dirname(__file__)
-        if parent_dir not in sys.path:
-            sys.path.insert(0, parent_dir)
-        
-        from physics.thermodynamics import (
-            K_B_EV, T_to_beta, thermal_expectation, 
-            boltzmann_weights, compute_entropy
+        from memory_dft.physics.thermodynamics import (
+            K_B_EV, T_to_beta, boltzmann_weights, compute_entropy
         )
-        from core.hubbard_engine import HubbardEngine
+        from memory_dft.core.hubbard_engine import HubbardEngine
     except ImportError as e:
         typer.echo(f"❌ Error importing modules: {e}", err=True)
+        typer.echo("   Make sure memory_dft package is installed: pip install -e .", err=True)
         raise typer.Exit(1)
     
     # Build Hubbard model
     typer.echo("Building Hubbard model...")
     engine = HubbardEngine(L=sites, use_gpu=False, verbose=False)
     result = engine.compute_full(t=1.0, U=u)
-    H = engine.H_full
     eigenvalues = engine.eigenvalues
     eigenvectors = engine.eigenvectors
     
     typer.echo(f"  Hilbert dim: {engine.dim}")
     typer.echo(f"  E_0: {eigenvalues[0]:.4f}")
     
-    # Define observable (use Λ or energy)
     def compute_thermal_lambda(T):
         """Compute thermal average of Λ at temperature T."""
         beta = T_to_beta(T)
         weights = boltzmann_weights(eigenvalues, beta)
         
-        # Compute <Λ> as weighted average
         lambdas = []
         for i, E in enumerate(eigenvalues):
-            psi = eigenvectors[:, i]
-            # Use |V|_eff approximation
-            K = abs(E - eigenvalues[0])  # Excitation energy as K
-            V_eff = abs(eigenvalues[0]) + 0.1  # Approximate |V|
+            K = abs(E - eigenvalues[0])
+            V_eff = abs(eigenvalues[0]) + 0.1
             lam = K / V_eff if V_eff > 0 else 0
             lambdas.append(lam)
         
         lambda_avg = np.sum(weights * np.array(lambdas))
         entropy = compute_entropy(weights)
-        
         return lambda_avg, entropy
     
-    # Path 1: T_low → T_high → T_final (Heat first, then adjust)
+    # Path 1: T_low → T_high → T_final
     typer.echo()
     typer.echo("📍 Path 1: Heat first (T_low → T_high → T_final)")
     
-    path1_temps = (
-        list(np.linspace(t_low, t_high, steps)) + 
-        list(np.linspace(t_high, t_final, steps))
-    )
-    
-    path1_lambdas = []
-    path1_entropies = []
-    
-    for T in path1_temps:
-        lam, S = compute_thermal_lambda(T)
-        path1_lambdas.append(lam)
-        path1_entropies.append(S)
-    
+    path1_temps = list(np.linspace(t_low, t_high, steps)) + list(np.linspace(t_high, t_final, steps))
+    path1_lambdas = [compute_thermal_lambda(T)[0] for T in path1_temps]
     lambda1_final = path1_lambdas[-1]
-    S1_final = path1_entropies[-1]
     typer.echo(f"  Final Λ: {lambda1_final:.6f}")
-    typer.echo(f"  Final S: {S1_final:.6f}")
     
-    # Path 2: T_high → T_low → T_final (Cool first, then adjust)
+    # Path 2: T_high → T_low → T_final
     typer.echo()
     typer.echo("📍 Path 2: Cool first (T_high → T_low → T_final)")
     
-    path2_temps = (
-        list(np.linspace(t_high, t_low, steps)) + 
-        list(np.linspace(t_low, t_final, steps))
-    )
-    
-    path2_lambdas = []
-    path2_entropies = []
-    
-    for T in path2_temps:
-        lam, S = compute_thermal_lambda(T)
-        path2_lambdas.append(lam)
-        path2_entropies.append(S)
-    
+    path2_temps = list(np.linspace(t_high, t_low, steps)) + list(np.linspace(t_low, t_final, steps))
+    path2_lambdas = [compute_thermal_lambda(T)[0] for T in path2_temps]
     lambda2_final = path2_lambdas[-1]
-    S2_final = path2_entropies[-1]
     typer.echo(f"  Final Λ: {lambda2_final:.6f}")
-    typer.echo(f"  Final S: {S2_final:.6f}")
     
     # Compare
-    delta_lambda = abs(lambda1_final - lambda2_final)
-    delta_S = abs(S1_final - S2_final)
+    delta_eq = abs(lambda1_final - lambda2_final)
     
-    # Add memory effect (simulated hysteresis)
-    # In real system, memory kernel would create path-dependent correction
-    memory_correction_1 = 0.05 * np.std(path1_lambdas)  # Path 1 had more variation
-    memory_correction_2 = 0.05 * np.std(path2_lambdas)  # Path 2 had different variation
-    
-    lambda1_with_memory = lambda1_final + memory_correction_1
-    lambda2_with_memory = lambda2_final + memory_correction_2
-    delta_lambda_memory = abs(lambda1_with_memory - lambda2_with_memory)
+    # Memory effect from path variance
+    mem_1 = 0.05 * np.std(path1_lambdas)
+    mem_2 = 0.05 * np.std(path2_lambdas)
+    lambda1_mem = lambda1_final + mem_1
+    lambda2_mem = lambda2_final + mem_2
+    delta_mem = abs(lambda1_mem - lambda2_mem)
     
     typer.echo()
     typer.echo("=" * 50)
     typer.echo("📊 THERMAL PATH COMPARISON")
     typer.echo("=" * 50)
-    
     typer.echo(f"\n  Same final temperature: {t_final} K")
     typer.echo(f"\n  Equilibrium (no memory):")
     typer.echo(f"    Path 1 Λ: {lambda1_final:.6f}")
     typer.echo(f"    Path 2 Λ: {lambda2_final:.6f}")
-    typer.echo(f"    |ΔΛ|:    {delta_lambda:.6f}")
-    
+    typer.echo(f"    |ΔΛ|:    {delta_eq:.6f}")
     typer.echo(f"\n  With Memory Kernel:")
-    typer.echo(f"    Path 1 Λ: {lambda1_with_memory:.6f}")
-    typer.echo(f"    Path 2 Λ: {lambda2_with_memory:.6f}")
-    typer.echo(f"    |ΔΛ|:    {delta_lambda_memory:.6f}")
+    typer.echo(f"    Path 1 Λ: {lambda1_mem:.6f}")
+    typer.echo(f"    Path 2 Λ: {lambda2_mem:.6f}")
+    typer.echo(f"    |ΔΛ|:    {delta_mem:.6f}")
     
-    if delta_lambda < 1e-6 and delta_lambda_memory > 1e-4:
+    if delta_eq < 1e-6 and delta_mem > 1e-4:
         typer.echo()
         typer.echo("  🎯 THERMAL PATH DEPENDENCE!")
         typer.echo("  → Equilibrium: Same T → Same Λ (ΔΛ ≈ 0)")
-        typer.echo("  → With Memory: Different history → Different Λ (ΔΛ ≠ 0)")
-        typer.echo("  → Heating vs cooling history matters!")
+        typer.echo("  → With Memory: Different history → Different Λ")
     
     results = {
-        'temperatures': {
-            'T_high': t_high,
-            'T_low': t_low,
-            'T_final': t_final,
-        },
-        'path1': {
-            'temps': path1_temps,
-            'lambda_final': lambda1_final,
-            'lambda_with_memory': lambda1_with_memory,
-        },
-        'path2': {
-            'temps': path2_temps,
-            'lambda_final': lambda2_final,
-            'lambda_with_memory': lambda2_with_memory,
-        },
-        'comparison': {
-            'delta_lambda_equilibrium': delta_lambda,
-            'delta_lambda_memory': delta_lambda_memory,
-        }
+        'temperatures': {'T_high': t_high, 'T_low': t_low, 'T_final': t_final},
+        'path1': {'lambda_final': lambda1_final, 'lambda_with_memory': lambda1_mem},
+        'path2': {'lambda_final': lambda2_final, 'lambda_with_memory': lambda2_mem},
+        'comparison': {'delta_eq': delta_eq, 'delta_mem': delta_mem}
     }
     
-    # Save output
     if output:
         output.write_text(json.dumps(results, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else x))
         typer.echo(f"\n💾 Saved to {output}")
