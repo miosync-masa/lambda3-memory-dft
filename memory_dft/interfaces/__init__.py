@@ -4,6 +4,9 @@ Interfaces Module
 
 External quantum chemistry package interfaces for DSE calculations.
 
+REFACTORED: MemoryKernelDFT is now a wrapper around core.memory_kernel
+            (no longer a separate implementation!)
+
 Available Interfaces:
   - pyscf_interface: PySCF integration for DFT vs DSE comparison
 """
@@ -19,7 +22,8 @@ try:
         PathResult,
         ComparisonResult,
         GeometryStep,
-        MemoryKernelDFT,
+        MemoryKernelDFTWrapper,
+        MemoryKernelDFT,  # deprecated alias
         create_h2_stretch_path,
         create_h2_compress_path,
         demo_h2_comparison,
@@ -29,6 +33,7 @@ try:
         'PathResult', 
         'ComparisonResult',
         'GeometryStep',
+        'MemoryKernelDFTWrapper',
         'MemoryKernelDFT',
         'create_h2_stretch_path',
         'create_h2_compress_path',
