@@ -1,8 +1,9 @@
 """
-Lattice Command - True DSE Implementation
-==========================================
+Lattice Command - True DSE Implementation (Unified Engine)
+==========================================================
 
 2D Lattice simulation with time evolution and path dependence.
+Uses unified SparseEngine for all operations.
 
 Core insight:
   --path-compare: Field path dependence
@@ -34,7 +35,7 @@ Author: Masamichi Iizumi, Tamaki Iizumi
 
 import typer
 import numpy as np
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 
 from ..utils import (
@@ -44,12 +45,18 @@ from ..utils import (
 
 
 # =============================================================================
-# Lattice DSE Runner (True Time Evolution)
+# Lattice DSE Runner (Using Unified SparseEngine)
 # =============================================================================
 
 class LatticeDSERunner:
     """
     2D Lattice DSE with time evolution.
+    
+    Uses unified SparseEngine for:
+      - GPU/CPU automatic backend
+      - All model Hamiltonians
+      - λ calculation
+      - Ground state computation
     
     Key difference from static calculation:
     - Static: eigsh(H) at each step → no memory
@@ -59,13 +66,15 @@ class LatticeDSERunner:
     SUPPORTED_MODELS = ['heisenberg', 'xy', 'kitaev', 'ising']
     
     def __init__(self, lx: int, ly: int, model: str = 'heisenberg',
-                 j: float = 1.0, verbose: bool = True):
+                 j: float = 1.0, energy_scale: float = 0.1,
+                 use_gpu: bool = True, verbose: bool = True):
         self.lx = lx
         self.ly = ly
         self.n_sites = lx * ly
         self.dim = 2 ** self.n_sites
         self.model = model.lower()
         self.j = j
+        self.energy_scale = energy_scale
         self.verbose = verbose
         
         if self.model not in self.SUPPORTED_MODELS:
@@ -75,104 +84,110 @@ class LatticeDSERunner:
         if self.dim > 2**16:
             raise ValueError(f"System too large: dim={self.dim}. Max 2^16=65536")
         
-        # Import modules
+        # Import unified engine
         try:
-            from memory_dft.core.lattice import LatticeGeometry2D
-            from memory_dft.core.operators import SpinOperators
-            from memory_dft.core.hamiltonian import HamiltonianBuilder
-            from scipy.sparse.linalg import eigsh
-            import scipy.sparse as sp
-            
-            self.LatticeGeometry2D = LatticeGeometry2D
-            self.SpinOperators = SpinOperators
-            self.HamiltonianBuilder = HamiltonianBuilder
-            self.eigsh = eigsh
-            self.sp = sp
+            from memory_dft.core.sparse_engine_unified import SparseEngine
+            self.SparseEngine = SparseEngine
         except ImportError as e:
-            raise ImportError(f"Could not import modules: {e}")
+            raise ImportError(f"Could not import SparseEngine: {e}")
         
         # Boltzmann constant
         self.K_B_EV = 8.617333262e-5
         
-        # Build lattice and operators
-        self.lattice = self.LatticeGeometry2D(lx, ly, periodic_x=True, periodic_y=True)
-        self.ops = self.SpinOperators(self.n_sites)
-        self.builder = self.HamiltonianBuilder(self.lattice, self.ops)
+        # Build engine with square geometry
+        self.engine = self.SparseEngine(self.n_sites, use_gpu=use_gpu, verbose=False)
+        self.geometry = self.engine.build_square(lx, ly, periodic_x=True, periodic_y=True)
         
         if verbose:
             print(f"  Lattice: {lx}×{ly} = {self.n_sites} sites")
             print(f"  Hilbert space: 2^{self.n_sites} = {self.dim}")
             print(f"  Model: {model}")
+            print(f"  Backend: {'GPU' if self.engine.use_gpu else 'CPU'}")
     
     def build_hamiltonian(self, h_field: float = 0.0, 
                           kx: float = 1.0, ky: float = 0.8, kz: float = 0.3):
         """Build Hamiltonian with optional transverse field."""
+        bonds = self.geometry.bonds
+        
         if self.model == 'heisenberg':
-            H = self.builder.heisenberg(J=self.j)
+            H = self.engine.build_heisenberg(bonds, J=self.j, split_KV=False)
         elif self.model == 'xy':
-            H = self.builder.xy(J=self.j)
+            H = self.engine.build_xy(bonds, J=self.j)
         elif self.model == 'kitaev':
-            H = self.builder.kitaev_rect(Kx=kx, Ky=ky, Kz_diag=kz)
+            H = self.engine.build_kitaev(self.lx, self.ly, Kx=kx, Ky=ky, Kz=kz)
         elif self.model == 'ising':
-            H = self.builder.ising(J=self.j, h=h_field)
+            H = self.engine.build_ising(bonds, J=self.j, h=h_field, split_KV=False)
             return H  # Ising already includes field
         else:
             raise ValueError(f"Unknown model: {self.model}")
         
         # Add transverse field for non-Ising models
         if abs(h_field) > 1e-10:
-            H = H + h_field * self.ops.S_total_x
+            H = H + h_field * self.engine.S_total_x
         
         return H
     
-    def build_H_KV(self, h_field: float = 0.0):
+    def build_H_KV(self, h_field: float = 0.0) -> Tuple:
         """Build H_K (kinetic) and H_V (potential) separately for λ calculation."""
-        # For spin models: K = exchange, V = field
+        bonds = self.geometry.bonds
+        
         if self.model == 'heisenberg':
-            H_K = self.builder.heisenberg(J=self.j)
-        elif self.model == 'xy':
-            H_K = self.builder.xy(J=self.j)
-        elif self.model == 'ising':
-            # Ising: K = ZZ interaction, V = transverse field
-            H_K = self.sp.csr_matrix((self.dim, self.dim), dtype=np.complex128)
-            for (i, j_site) in self.lattice.bonds_nn:
-                H_K += self.j * self.ops.Sz[i] @ self.ops.Sz[j_site]
-            H_V = h_field * self.ops.S_total_x
+            H_K, H_V = self.engine.build_heisenberg(bonds, J=self.j, split_KV=True)
+            # Add field to H_V
+            if abs(h_field) > 1e-10:
+                H_V = H_V + h_field * self.engine.S_total_x
             return H_K, H_V
+            
+        elif self.model == 'xy':
+            H_K = self.engine.build_xy(bonds, J=self.j)
+            H_V = h_field * self.engine.S_total_x if abs(h_field) > 1e-10 else \
+                  self.engine.sparse.csr_matrix((self.dim, self.dim), dtype=np.complex128)
+            return H_K, H_V
+            
+        elif self.model == 'ising':
+            H_K, H_V = self.engine.build_ising(bonds, J=self.j, h=h_field, split_KV=True)
+            return H_K, H_V
+            
+        elif self.model == 'kitaev':
+            H = self.engine.build_kitaev(self.lx, self.ly)
+            H_V = h_field * self.engine.S_total_x if abs(h_field) > 1e-10 else \
+                  self.engine.sparse.csr_matrix((self.dim, self.dim), dtype=np.complex128)
+            return H, H_V
+        
         else:
             H_K = self.build_hamiltonian(h_field=0)
-        
-        H_V = h_field * self.ops.S_total_x if abs(h_field) > 1e-10 else \
-              self.sp.csr_matrix((self.dim, self.dim), dtype=np.complex128)
-        
-        return H_K, H_V
+            H_V = self.engine.sparse.csr_matrix((self.dim, self.dim), dtype=np.complex128)
+            return H_K, H_V
     
     def compute_ground_state(self, H):
-        """Compute ground state."""
-        try:
-            E0, psi0 = self.eigsh(H, k=1, which='SA')
-            return E0[0], psi0[:, 0]
-        except Exception as e:
-            if self.verbose:
-                print(f"  Warning: eigsh failed ({e}), using dense")
-            eigenvalues, eigenvectors = np.linalg.eigh(H.toarray())
-            return eigenvalues[0], eigenvectors[:, 0]
+        """Compute ground state using engine."""
+        return self.engine.compute_ground_state(H)
     
     def compute_lambda(self, psi: np.ndarray, H_K, H_V) -> float:
-        """Compute stability parameter λ = |K|/|V|."""
-        K = float(np.real(np.vdot(psi, H_K @ psi)))
-        V = float(np.real(np.vdot(psi, H_V @ psi)))
-        return abs(K) / (abs(V) + 1e-10)
+        """Compute stability parameter λ = |K|/|V| using engine."""
+        return self.engine.compute_lambda(psi, H_K, H_V)
     
     def time_evolve(self, psi: np.ndarray, H, dt: float) -> np.ndarray:
         """Time evolution: |ψ(t+dt)⟩ = exp(-iHdt)|ψ(t)⟩."""
+        xp = self.engine.xp
+        
         try:
             from memory_dft.solvers import lanczos_expm_multiply
             return lanczos_expm_multiply(H, psi, dt, krylov_dim=20)
         except ImportError:
+            # Fallback to dense expm
             from scipy.linalg import expm
-            U = expm(-1j * H.toarray() * dt)
-            return U @ psi
+            if self.engine.use_gpu:
+                H_dense = H.toarray().get()
+                psi_np = psi.get() if hasattr(psi, 'get') else psi
+            else:
+                H_dense = H.toarray()
+                psi_np = psi
+            U = expm(-1j * H_dense * dt)
+            result = U @ psi_np
+            if self.engine.use_gpu:
+                return xp.asarray(result)
+            return result
     
     # =========================================================================
     # Single Simulation (Static)
@@ -184,17 +199,19 @@ class LatticeDSERunner:
         E0, psi0 = self.compute_ground_state(H)
         
         # Observables
-        mz = float(np.real(np.vdot(psi0, self.ops.S_total_z @ psi0)))
+        mz = self.engine.compute_magnetization(psi0) * self.n_sites
         
         # NN correlation
-        i, j = self.lattice.bonds_nn[0]
-        SiSj = self.ops.Sz[i] @ self.ops.Sz[j]
-        corr = float(np.real(np.vdot(psi0, SiSj @ psi0)))
+        if len(self.geometry.bonds) > 0:
+            i, j = self.geometry.bonds[0]
+            corr = self.engine.compute_correlation(psi0, i, j, 'Z')
+        else:
+            corr = 0.0
         
         return {
             'E0': float(E0),
-            'magnetization': mz,
-            'nn_correlation': corr,
+            'magnetization': float(mz),
+            'nn_correlation': float(corr),
             'h_field': h_field,
         }
     
@@ -202,88 +219,77 @@ class LatticeDSERunner:
     # Field Path Comparison (DSE)
     # =========================================================================
     
-    def evolve_field_path(self, h_values: List[float], 
-                          dt: float = 0.1, steps_per_h: int = 10) -> Dict[str, Any]:
+    def evolve_field_path(self, h_values: List[float], dt: float = 0.1) -> Dict[str, Any]:
         """
-        Evolve along field path with time evolution.
+        Evolve along a field path with TRUE time evolution.
         
-        This is TRUE DSE - state evolves, history matters!
+        Key: State evolves continuously, preserving history!
         """
-        # Start from ground state at initial field
-        h0 = h_values[0]
-        H0 = self.build_hamiltonian(h0)
-        _, psi = self.compute_ground_state(H0)
+        xp = self.engine.xp
         
-        # Track evolution
-        times = []
-        lambdas = []
-        energies = []
-        t = 0.0
+        # Initial state: ground state at first h
+        H0 = self.build_hamiltonian(h_values[0])
+        E0, psi = self.compute_ground_state(H0)
         
-        for h in h_values:
+        # Time evolution along path
+        for h in h_values[1:]:
             H = self.build_hamiltonian(h)
-            H_K, H_V = self.build_H_KV(h)
-            
-            for step in range(steps_per_h):
-                # Compute observables
-                E = float(np.real(np.vdot(psi, H @ psi)))
-                lam = self.compute_lambda(psi, H_K, H_V)
-                
-                times.append(t)
-                lambdas.append(lam)
-                energies.append(E)
-                
-                # Time evolve
-                psi = self.time_evolve(psi, H, dt)
-                psi = psi / np.linalg.norm(psi)  # Normalize
-                t += dt
+            psi = self.time_evolve(psi, H, dt)
+            psi = psi / xp.linalg.norm(psi)  # Renormalize
+        
+        # Final λ calculation
+        H_K, H_V = self.build_H_KV(h_values[-1])
+        H_final = H_K + H_V
+        E_final = float(xp.real(xp.vdot(psi, H_final @ psi)))
+        lambda_final = self.compute_lambda(psi, H_K, H_V)
         
         return {
-            'times': times,
-            'lambdas': lambdas,
-            'energies': energies,
-            'lambda_final': lambdas[-1] if lambdas else 0.0,
-            'E_final': energies[-1] if energies else 0.0,
-            'h_values': h_values,
+            'lambda_final': lambda_final,
+            'E_final': E_final,
+            'psi_final': psi,
         }
     
     def compare_field_paths(self, h_final: float = 0.5, 
-                            steps: int = 5, dt: float = 0.1,
-                            steps_per_h: int = 10) -> Dict[str, Any]:
+                            steps: int = 10) -> Dict[str, Any]:
         """
-        Compare two field paths to same final H.
+        Compare two different field paths to the same final Hamiltonian.
         
-        Path 1: h=0 → h=h_final (increase)
-        Path 2: h=2*h_final → h=h_final (decrease)
+        Path 1: h = 0 → h_final (field increase)
+        Path 2: h = 2*h_final → h_final (field decrease)
+        
+        DSE shows different results. DFT cannot distinguish!
         """
-        # Build paths
+        dt = 0.1
+        
+        # Path 1: 0 → h_final
         path1_h = list(np.linspace(0, h_final, steps))
-        path2_h = list(np.linspace(2*h_final, h_final, steps))
+        
+        # Path 2: 2*h_final → h_final
+        path2_h = list(np.linspace(2 * h_final, h_final, steps))
         
         if self.verbose:
-            print(f"\n  Path 1: h=0 → h={h_final}")
-            print(f"  Path 2: h={2*h_final} → h={h_final}")
+            print(f"\n  Path 1: h = 0 → {h_final}")
+            print(f"  Path 2: h = {2*h_final} → {h_final}")
         
-        # Evolve both paths
-        result1 = self.evolve_field_path(path1_h, dt, steps_per_h)
-        result2 = self.evolve_field_path(path2_h, dt, steps_per_h)
+        result1 = self.evolve_field_path(path1_h, dt)
+        result2 = self.evolve_field_path(path2_h, dt)
         
-        # Static (DFT) reference
-        H_final = self.build_hamiltonian(h_final)
+        # Static calculation (DFT-like)
         H_K, H_V = self.build_H_KV(h_final)
-        E_static, psi_static = self.compute_ground_state(H_final)
+        H = H_K + H_V
+        E_static, psi_static = self.compute_ground_state(H)
         lambda_static = self.compute_lambda(psi_static, H_K, H_V)
         
-        delta_dse = abs(result1['lambda_final'] - result2['lambda_final'])
+        delta_lambda = abs(result1['lambda_final'] - result2['lambda_final'])
         
         return {
             'path1': {
-                'label': f'h: 0→{h_final}',
+                'label': f'0→{h_final}',
                 'lambda_final': result1['lambda_final'],
                 'E_final': result1['E_final'],
             },
             'path2': {
-                'label': f'h: {2*h_final}→{h_final}',
+                'label': f'{2*h_final}→{h_final}',
                 'lambda_final': result2['lambda_final'],
                 'E_final': result2['E_final'],
             },
@@ -292,88 +298,89 @@ class LatticeDSERunner:
                 'E': float(E_static),
             },
             'dse': {
-                'delta_lambda': delta_dse,
+                'delta_lambda': delta_lambda,
             },
             'h_final': h_final,
         }
     
     # =========================================================================
-    # Thermal Path Comparison (DSE)
+    # Thermal Path (DSE)
     # =========================================================================
     
-    def T_to_beta(self, T_kelvin: float, energy_scale: float = 1.0) -> float:
-        """Convert temperature to inverse temperature."""
-        if T_kelvin <= 0:
-            return float('inf')
-        return energy_scale / (self.K_B_EV * T_kelvin)
+    def T_to_beta(self, T: float) -> float:
+        """Temperature to inverse temperature β = E_scale / (k_B T)."""
+        return self.energy_scale / (self.K_B_EV * T) if T > 0 else float('inf')
     
     def boltzmann_weights(self, eigenvalues: np.ndarray, beta: float) -> np.ndarray:
         """Compute Boltzmann weights."""
-        if beta == float('inf'):
-            weights = np.zeros(len(eigenvalues))
-            weights[0] = 1.0
-            return weights
-        
-        E_min = np.min(eigenvalues)
-        E_shifted = eigenvalues - E_min
-        boltzmann = np.exp(-beta * E_shifted)
-        return boltzmann / np.sum(boltzmann)
+        E_shifted = eigenvalues - eigenvalues.min()
+        exp_vals = np.exp(-beta * E_shifted)
+        return exp_vals / exp_vals.sum()
     
     def diagonalize(self, H, n_states: int = 14):
-        """Diagonalize Hamiltonian."""
-        n_states = min(n_states, self.dim - 2)
-        eigenvalues, eigenvectors = self.eigsh(H, k=n_states, which='SA')
-        idx = np.argsort(eigenvalues)
-        return eigenvalues[idx], eigenvectors[:, idx]
+        """Full diagonalization for thermal calculations."""
+        xp = self.engine.xp
+        
+        try:
+            # Sparse eigensolve for lowest n_states
+            eigenvalues, eigenvectors = self.engine.eigsh(H, k=n_states, which='SA')
+            if self.engine.use_gpu:
+                eigenvalues = eigenvalues.get()
+                eigenvectors = eigenvectors.get()
+            return eigenvalues, eigenvectors
+        except Exception:
+            # Fallback to dense
+            if self.engine.use_gpu:
+                H_dense = H.toarray().get()
+            else:
+                H_dense = H.toarray()
+            eigenvalues, eigenvectors = np.linalg.eigh(H_dense)
+            return eigenvalues[:n_states], eigenvectors[:, :n_states]
     
-    def evolve_thermal_path(self, temps: List[float], H, H_K, H_V,
+    def evolve_thermal_path(self, temperatures: List[float], H, H_K, H_V,
                             eigenvalues: np.ndarray, eigenvectors: np.ndarray,
-                            dt: float = 0.1, steps_per_T: int = 10) -> Dict[str, Any]:
-        """Evolve along temperature path."""
-        # Initialize with thermal state at T0
-        T0 = temps[0]
-        beta0 = self.T_to_beta(T0)
-        weights = self.boltzmann_weights(eigenvalues, beta0)
+                            dt: float = 0.1) -> Dict[str, Any]:
+        """
+        Evolve along temperature path with thermal ensemble tracking.
         
-        # Active states
-        active_mask = weights > 1e-10
-        active_indices = np.where(active_mask)[0]
+        Each eigenstate evolves, weighted by Boltzmann factors.
+        """
+        n_states = len(eigenvalues)
         
-        evolved_psis = [eigenvectors[:, i].copy() for i in active_indices]
-        evolved_weights = [weights[i] for i in active_indices]
+        # Initialize: each eigenstate at its energy
+        psi_list = [eigenvectors[:, n].copy() for n in range(n_states)]
         
-        times = []
-        lambdas = []
-        t = 0.0
+        # Temperature evolution
+        for T in temperatures:
+            beta = self.T_to_beta(T)
+            weights = self.boltzmann_weights(eigenvalues, beta)
+            
+            # Time evolve each state
+            for n in range(n_states):
+                psi_list[n] = self.time_evolve(psi_list[n], H, dt)
+                psi_list[n] = psi_list[n] / np.linalg.norm(psi_list[n])
         
-        for T in temps:
-            for step in range(steps_per_T):
-                # Thermal average λ
-                K_total = 0.0
-                V_total = 0.0
-                
-                for i, psi in enumerate(evolved_psis):
-                    w = evolved_weights[i]
-                    K = float(np.real(np.vdot(psi, H_K @ psi)))
-                    V = float(np.real(np.vdot(psi, H_V @ psi)))
-                    K_total += w * K
-                    V_total += w * V
-                
-                lam = abs(K_total) / (abs(V_total) + 1e-10)
-                times.append(t)
-                lambdas.append(lam)
-                
-                # Time evolve each state
-                for i in range(len(evolved_psis)):
-                    evolved_psis[i] = self.time_evolve(evolved_psis[i], H, dt)
-                    evolved_psis[i] = evolved_psis[i] / np.linalg.norm(evolved_psis[i])
-                
-                t += dt
+        # Final thermal average
+        beta_final = self.T_to_beta(temperatures[-1])
+        weights = self.boltzmann_weights(eigenvalues, beta_final)
+        
+        K_total = 0.0
+        V_total = 0.0
+        active_indices = []
+        
+        for n in range(n_states):
+            if weights[n] > 1e-6:
+                active_indices.append(n)
+                psi_n = psi_list[n]
+                K_n = float(np.real(np.vdot(psi_n, H_K @ psi_n)))
+                V_n = float(np.real(np.vdot(psi_n, H_V @ psi_n)))
+                K_total += weights[n] * K_n
+                V_total += weights[n] * V_n
+        
+        lambda_final = abs(K_total) / (abs(V_total) + 1e-10)
         
         return {
-            'times': times,
-            'lambdas': lambdas,
-            'lambda_final': lambdas[-1] if lambdas else 0.0,
+            'lambda_final': lambda_final,
             'n_active': len(active_indices),
         }
     
@@ -448,6 +455,8 @@ def lattice(
     kx: float = typer.Option(1.0, "--Kx", help="Kitaev Kx"),
     ky: float = typer.Option(0.8, "--Ky", help="Kitaev Ky"),
     kz: float = typer.Option(0.3, "--Kz", help="Kitaev Kz"),
+    energy_scale: float = typer.Option(0.1, "--energy-scale", "-E",
+                                        help="Energy scale for β (eV). 0.1=organic, 1.0=metal"),
     path_compare: bool = typer.Option(False, "--path-compare", "-p",
                                        help="Compare field paths (DSE)"),
     thermal: bool = typer.Option(False, "--thermal", "-T",
@@ -456,11 +465,12 @@ def lattice(
     t_low: float = typer.Option(50.0, "--T-low", help="Low temperature (K)"),
     t_final: float = typer.Option(150.0, "--T-final", help="Final temperature (K)"),
     steps: int = typer.Option(5, "--steps", help="Steps per path segment"),
+    gpu: bool = typer.Option(True, "--gpu/--no-gpu", help="Use GPU if available"),
     output: Optional[Path] = typer.Option(None, "-o", "--output",
                                           help="Output JSON file"),
 ):
     """
-    2D Lattice DSE simulation.
+    2D Lattice DSE simulation (Unified SparseEngine).
     
     Three modes:
       1. Single (default): Static ground state calculation
@@ -481,6 +491,7 @@ def lattice(
         print_key_value("h_final", str(h_field))
     elif thermal:
         print_key_value("Mode", "Thermal path comparison (DSE)")
+        print_key_value("Energy scale", f"{energy_scale} eV")
         print_key_value("T_high/T_low/T_final", f"{t_high}/{t_low}/{t_final} K")
     else:
         print_key_value("Mode", "Single (static)")
@@ -491,7 +502,8 @@ def lattice(
     
     # Initialize runner
     try:
-        runner = LatticeDSERunner(lx, ly, model, j, verbose=True)
+        runner = LatticeDSERunner(lx, ly, model, j, energy_scale, 
+                                   use_gpu=gpu, verbose=True)
     except (ImportError, ValueError) as e:
         error_exit(str(e), "Check parameters or install dependencies")
     
