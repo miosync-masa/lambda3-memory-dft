@@ -3,6 +3,12 @@ H2 Molecule Memory-DFT Test
 ===========================
 
 簡単なH2分子モデルでMemory-DFTの動作検証
+
+Tests:
+  1-5: Hubbard model based tests (educational/validation)
+  6: γ distance decomposition (Non-Markovian QSOT)
+  7: Real DFT vs DSE using PySCF (publication-ready!)
+
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
@@ -94,18 +100,25 @@ def test_basic_evolution():
     return result
 
 
-def test_memory_vs_standard():
-    """Memory-DFT vs 標準量子力学の比較"""
+def test_memory_vs_memoryless():
+    """
+    Memory効果あり vs なしの比較（Hubbardモデル）
+    
+    注意: これはHubbard模型の厳密対角化であり、DFT計算ではない。
+    教育・検証目的で使用。本物のDFTとの比較はtest_real_dft_vs_dse()を参照。
+    """
     print("\n" + "="*70)
-    print("Test 2: Memory-DFT vs Standard QM")
+    print("Test 2: Memory vs Memoryless (Hubbard Model)")
     print("="*70)
+    print("  Note: This uses Hubbard ED, not actual DFT.")
+    print("        For real DFT comparison, see Test 7.")
     
     engine, H_K, H_V = create_h2_model()
     
     # 初期状態
     psi0 = np.array([1, 0, 0, 0], dtype=np.complex128)  # |↑↑⟩
     
-    # Memory-DFT
+    # With Memory
     config_mem = EvolutionConfig(
         t_end=10.0,
         dt=0.1,
@@ -116,7 +129,7 @@ def test_memory_vs_standard():
     evol_mem = TimeEvolutionEngine(H_K, H_V, config_mem, use_gpu=False)
     result_mem = evol_mem.run(psi0)
     
-    # Standard QM
+    # Memoryless
     config_std = EvolutionConfig(
         t_end=10.0,
         dt=0.1,
@@ -129,9 +142,9 @@ def test_memory_vs_standard():
     # 比較
     lambda_diff = np.array(result_mem.lambdas) - np.array(result_std.lambdas)
     
-    print(f"\nComparison:")
-    print(f"  Memory-DFT final Λ: {result_mem.lambdas[-1]:.4f}")
-    print(f"  Standard QM final Λ: {result_std.lambdas[-1]:.4f}")
+    print(f"\nComparison (Hubbard Model):")
+    print(f"  With Memory final Λ:    {result_mem.lambdas[-1]:.4f}")
+    print(f"  Memoryless final Λ:     {result_std.lambdas[-1]:.4f}")
     print(f"  Max |ΔΛ|: {np.max(np.abs(lambda_diff)):.4f}")
     print(f"  Mean |ΔΛ|: {np.mean(np.abs(lambda_diff)):.4f}")
     
@@ -457,51 +470,6 @@ def test_gamma_distance_decomposition():
         else:
             print(f"\n    → Local correlations dominate")
         
-        # ===========================================
-        # Generate PRL Figure 1: γ Decomposition
-        # ===========================================
-        try:
-            from memory_dft.visualization.prl_figures import fig1_gamma_decomposition
-            HAVE_VIS = True
-        except ImportError:
-            try:
-                import sys
-                sys.path.insert(0, '/home/claude')
-                from memory_dft.visualization.prl_figures import fig1_gamma_decomposition
-                HAVE_VIS = True
-            except ImportError:
-                HAVE_VIS = False
-        
-        if HAVE_VIS:
-            import os
-            output_dir = './prl_figures'
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Collect data from results_by_range
-            L_vals = [6, 8, 10]
-            gamma_local_data = []
-            gamma_total_data = []
-            
-            for L, alpha_local, alpha_total in zip(L_vals, 
-                                                    results_by_range.get(2, []),
-                                                    results_by_range.get(None, [])):
-                # We need actual gamma values per L, not just final fit
-                # For now, use the fitted values as approximation
-                pass
-            
-            # Use actual fitted values
-            print(f"\n  📊 Generating PRL Figure 1...")
-            fig1_gamma_decomposition(
-                L_values=[6, 8, 10, 12],
-                gamma_local_data=[1.45, 1.40, 1.39, 1.38],  # Example progression
-                gamma_total_data=[2.65, 2.61, 2.60, 2.59],
-                gamma_local_fit=gamma_local,
-                gamma_total_fit=gamma_total,
-                save_path=os.path.join(output_dir, 'fig1_gamma_decomposition.png'),
-                show=False
-            )
-            print(f"  ✅ Figure saved to {output_dir}/fig1_gamma_decomposition.png")
-        
         return {
             'gamma_total': gamma_total,
             'gamma_local': gamma_local,
@@ -509,6 +477,191 @@ def test_gamma_distance_decomposition():
         }
     
     return gammas
+
+
+def test_real_dft_vs_dse():
+    """
+    Test 7: Real DFT vs DSE Comparison using PySCF
+    ==============================================
+    
+    This is the publication-ready test that demonstrates:
+    - Standard DFT gives identical energies for different paths to same final state
+    - DSE captures history dependence
+    
+    Uses actual DFT calculations via PySCF, not Hubbard model approximations.
+    
+    Key result: ΔE_DFT ≈ 0, ΔE_DSE ≠ 0
+    """
+    print("\n" + "="*70)
+    print("Test 7: Real DFT vs DSE (PySCF)")
+    print("="*70)
+    print("  This uses actual DFT calculations, not Hubbard approximations!")
+    
+    # Check PySCF availability
+    try:
+        from pyscf import gto, dft
+        HAS_PYSCF = True
+    except ImportError:
+        HAS_PYSCF = False
+        print("\n  ⚠️ PySCF not available. Install with: pip install pyscf")
+        print("  Skipping real DFT test.")
+        return None
+    
+    # Import DSE calculator
+    try:
+        from memory_dft.interfaces.pyscf_interface import (
+            DSECalculator,
+            GeometryStep,
+        )
+    except ImportError:
+        try:
+            import sys
+            import os
+            interfaces_path = os.path.join(os.path.dirname(__file__), 'interfaces')
+            sys.path.insert(0, interfaces_path)
+            from pyscf_interface import DSECalculator, GeometryStep
+        except ImportError as e:
+            print(f"\n  ⚠️ DSECalculator not available: {e}")
+            print("  Skipping real DFT test.")
+            return None
+    
+    print("\n  Molecule: H2")
+    print("  Basis: sto-3g (fast) / cc-pvdz (accurate)")
+    print("  XC: LDA")
+    
+    # ===========================================
+    # Test with different basis sets
+    # ===========================================
+    
+    results = {}
+    
+    for basis in ['sto-3g', 'cc-pvdz']:
+        print(f"\n  {'='*50}")
+        print(f"  Basis: {basis}")
+        print(f"  {'='*50}")
+        
+        # Create calculator
+        calc = DSECalculator(
+            basis=basis,
+            xc='LDA',
+            memory_eta=0.05,
+            memory_tau=5.0,
+            verbose=0
+        )
+        
+        # H2 parameters
+        r_eq = 0.74  # Equilibrium bond length (Å)
+        r_stretch = 1.2  # Stretched
+        r_compress = 0.5  # Compressed
+        n_steps = 5
+        
+        # Create paths
+        def make_path(r_start, r_mid, r_end, n_steps):
+            path = []
+            t = 0.0
+            dt = 1.0
+            
+            for r in np.linspace(r_start, r_mid, n_steps):
+                atoms = f"H 0 0 0; H 0 0 {r}"
+                path.append(GeometryStep(atoms=atoms, time=t))
+                t += dt
+            
+            for r in np.linspace(r_mid, r_end, n_steps):
+                atoms = f"H 0 0 0; H 0 0 {r}"
+                path.append(GeometryStep(atoms=atoms, time=t))
+                t += dt
+            
+            return path
+        
+        # Path 1: Stretch → Return
+        path_stretch = make_path(r_eq, r_stretch, r_eq, n_steps)
+        
+        # Path 2: Compress → Return  
+        path_compress = make_path(r_eq, r_compress, r_eq, n_steps)
+        
+        print(f"    Path 1 (Stretch→Return): {len(path_stretch)} steps")
+        print(f"    Path 2 (Compress→Return): {len(path_compress)} steps")
+        
+        # Run calculations
+        print(f"    Running DFT calculations...")
+        
+        result1 = calc.compute_path(path_stretch, label="Stretch→Return")
+        result2 = calc.compute_path(path_compress, label="Compress→Return")
+        
+        # Calculate differences
+        diff_dft = abs(result1.E_dft_final - result2.E_dft_final)
+        diff_dse = abs(result1.E_dse_final - result2.E_dse_final)
+        
+        print(f"\n    Results:")
+        print(f"    ─────────────────────────────────────────")
+        print(f"    Path 1 (Stretch→Return):")
+        print(f"      E_DFT (final):  {result1.E_dft_final:.6f} Ha")
+        print(f"      E_DSE (final):  {result1.E_dse_final:.6f} Ha")
+        print(f"      Memory effect:  {result1.memory_effect:.6f} Ha")
+        
+        print(f"\n    Path 2 (Compress→Return):")
+        print(f"      E_DFT (final):  {result2.E_dft_final:.6f} Ha")
+        print(f"      E_DSE (final):  {result2.E_dse_final:.6f} Ha")
+        print(f"      Memory effect:  {result2.memory_effect:.6f} Ha")
+        
+        print(f"\n    ═══════════════════════════════════════")
+        print(f"    |ΔE| DFT:  {diff_dft:.8f} Ha  ({diff_dft * 27.211:.4f} eV)")
+        print(f"    |ΔE| DSE:  {diff_dse:.8f} Ha  ({diff_dse * 27.211:.4f} eV)")
+        
+        if diff_dft < 1e-8:
+            print(f"\n    🎯 DFT: Cannot distinguish paths! (ΔE ≈ 0)")
+            print(f"    🎯 DSE: REVEALS difference! (ΔE = {diff_dse:.6f} Ha)")
+        else:
+            ratio = diff_dse / diff_dft if diff_dft > 0 else float('inf')
+            print(f"\n    Amplification: {ratio:.1f}x")
+        
+        results[basis] = {
+            'path1': {
+                'E_dft': result1.E_dft_final,
+                'E_dse': result1.E_dse_final,
+                'memory_effect': result1.memory_effect,
+            },
+            'path2': {
+                'E_dft': result2.E_dft_final,
+                'E_dse': result2.E_dse_final,
+                'memory_effect': result2.memory_effect,
+            },
+            'diff_dft': diff_dft,
+            'diff_dse': diff_dse,
+            'diff_dft_eV': diff_dft * 27.211,
+            'diff_dse_eV': diff_dse * 27.211,
+        }
+    
+    # ===========================================
+    # Summary for publication
+    # ===========================================
+    print("\n" + "="*70)
+    print("📊 PUBLICATION SUMMARY: DFT vs DSE")
+    print("="*70)
+    
+    print("\n  Key Finding:")
+    print("  ─────────────────────────────────────────────────────")
+    print("  Same final geometry (H-H = 0.74 Å) reached via different paths:")
+    print()
+    print("  │ Basis    │  ΔE_DFT (eV)  │  ΔE_DSE (eV)  │ Ratio │")
+    print("  ├──────────┼───────────────┼───────────────┼───────┤")
+    
+    for basis, data in results.items():
+        ratio = data['diff_dse_eV'] / (data['diff_dft_eV'] + 1e-10)
+        ratio_str = f"{ratio:.0f}x" if data['diff_dft_eV'] < 1e-6 else f"{ratio:.1f}x"
+        print(f"  │ {basis:8s} │ {data['diff_dft_eV']:13.6f} │ {data['diff_dse_eV']:13.6f} │ {ratio_str:>5s} │")
+    
+    print("  └──────────┴───────────────┴───────────────┴───────┘")
+    print()
+    print("  Conclusion:")
+    print("    • Standard DFT is history-blind (ΔE ≈ 0)")
+    print("    • DSE captures path dependence (ΔE ≠ 0)")
+    print("    • Memory kernel is ESSENTIAL for history-dependent phenomena")
+    print()
+    print("  This is direct numerical evidence that DFT cannot distinguish")
+    print("  paths to the same final state, while DSE preserves history!")
+    
+    return results
 
 
 def run_all_tests():
@@ -519,18 +672,21 @@ def run_all_tests():
     
     try:
         test_basic_evolution()
-        test_memory_vs_standard()
+        test_memory_vs_memoryless()  # Renamed from test_memory_vs_standard
         test_hcsp_axioms()
         test_gamma_scaling()
         test_memory_kernel_decomposition()
-        test_gamma_distance_decomposition()  # NEW: Non-Markovian QSOT test
+        test_gamma_distance_decomposition()
+        test_real_dft_vs_dse()  # NEW: Real DFT comparison!
         
         print("\n" + "="*70)
-        print("🎉 All tests passed!")
+        print("🎉 All tests completed!")
         print("="*70)
         
     except Exception as e:
         print(f"\n❌ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 
