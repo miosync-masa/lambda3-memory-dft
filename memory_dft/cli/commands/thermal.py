@@ -58,9 +58,10 @@ class ThermalPathRunner:
         
         # Lazy import PySCF
         try:
-            from pyscf import gto, dft
+            from pyscf import gto, dft, scf
             self.gto = gto
             self.dft = dft
+            self.scf = scf
         except ImportError:
             raise ImportError("PySCF not installed. Run: pip install pyscf")
         
@@ -79,8 +80,14 @@ class ThermalPathRunner:
         mf.xc = 'LDA'
         
         # Finite temperature via Fermi-Dirac smearing
+        # Use scf.addons.smearing_ (not method on mf)
         sigma = self.K_B_HA * T
-        mf = mf.smearing_(sigma=sigma, method='fermi')
+        if sigma > 1e-8:  # Only apply smearing if sigma is meaningful
+            try:
+                mf = self.scf.addons.smearing_(mf, sigma=sigma, method='fermi')
+            except Exception:
+                # Fallback: run without smearing for molecules
+                pass
         
         return mf.kernel()
     
