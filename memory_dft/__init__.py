@@ -29,6 +29,18 @@ Key Results:
 
 Structure (Refactored):
   memory_dft/
+  ├── cli/                      # Command-line interface (REFACTORED)
+  │   ├── __init__.py           # Typer app & command registration
+  │   ├── utils.py              # Shared CLI utilities
+  │   └── commands/             # Individual command modules
+  │       ├── info.py           # memory-dft info
+  │       ├── run.py            # memory-dft run
+  │       ├── compare.py        # memory-dft compare
+  │       ├── thermal.py        # memory-dft thermal
+  │       ├── dft_compare.py    # memory-dft dft-compare
+  │       ├── lattice.py        # memory-dft lattice
+  │       ├── hysteresis.py     # memory-dft hysteresis
+  │       └── gamma.py          # memory-dft gamma
   ├── core/
   │   ├── memory_kernel.py      # 4-layer kernel (field/phys/chem/exclusion)
   │   ├── repulsive_kernel.py   # Compression memory
@@ -48,7 +60,7 @@ Structure (Refactored):
   │   ├── vorticity.py          # γ decomposition
   │   ├── thermodynamics.py     # Thermal utilities
   │   └── rdm.py                # 2-RDM analysis
-  ├── interfaces/               # External package interfaces (NEW)
+  ├── interfaces/               # External package interfaces
   │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
   ├── examples/                 # Example scripts
   │   ├── thermal_path.py       # Thermal path demo
@@ -66,7 +78,7 @@ DOI: 10.5281/zenodo.18095869
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
-__version__ = "1.4.0"
+__version__ = "0.5.0"
 
 # =============================================================================
 # Core Components
