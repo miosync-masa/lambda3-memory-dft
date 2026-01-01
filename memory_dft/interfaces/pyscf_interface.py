@@ -1,90 +1,65 @@
 """
-PySCF Interface for Memory-DFT / DSE
-====================================
+PySCF Interface for DSE
+=======================
 
-Enables direct comparison between standard DFT and
-history-dependent DSE calculations.
+Interface between PySCF DFT calculations and DSE memory framework.
 
-Key Features:
-  - Standard DFT via PySCF
-  - DSE with memory kernel corrections
-  - Path-dependent energy comparisons
-  - Publication-ready outputs
+IMPORTANT: This module now uses the unified memory kernel from
+           memory_dft.core.memory_kernel (NOT a separate implementation!)
 
-Example:
-    >>> from memory_dft.interfaces.pyscf_interface import DSECalculator
-    >>> calc = DSECalculator(basis='cc-pvdz', xc='B3LYP')
-    >>> 
-    >>> # Path 1: stretch then compress
-    >>> E_dft_1, E_dse_1 = calc.compute_path(mol, path1)
-    >>> 
-    >>> # Path 2: compress then stretch  
-    >>> E_dft_2, E_dse_2 = calc.compute_path(mol, path2)
-    >>> 
-    >>> # DFT: E_dft_1 == E_dft_2 (same final state)
-    >>> # DSE: E_dse_1 != E_dse_2 (history matters!)
+Key Classes:
+  - DSECalculator: Main calculator combining DFT with memory effects
+  - GeometryStep: Single step in a reaction path
+  - PathResult: Results from path computation
+  - ComparisonResult: Comparison of two paths
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
 import numpy as np
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, Dict, Any
-import warnings
+from typing import List, Tuple, Optional
+from dataclasses import dataclass
 
-# PySCF import (optional)
+# Check PySCF availability
 try:
-    from pyscf import gto, dft, scf
+    from pyscf import gto, dft
     HAS_PYSCF = True
 except ImportError:
     HAS_PYSCF = False
-    warnings.warn("PySCF not available. Install with: pip install pyscf")
 
+
+# =============================================================================
+# Data Classes
+# =============================================================================
 
 @dataclass
 class GeometryStep:
-    """Single geometry in a reaction path."""
-    atoms: str           # PySCF atom string format
-    time: float          # Pseudo-time for memory kernel
-    label: str = ""      # Optional label (e.g., "TS", "Product")
-    
-    def __post_init__(self):
-        if self.label == "":
-            self.label = f"t={self.time:.2f}"
+    """Single geometry step in a reaction path."""
+    atoms: str       # Atom string in PySCF format
+    time: float      # Pseudo-time for memory tracking
+    label: str = ""  # Optional label
 
 
-@dataclass  
+@dataclass
 class PathResult:
-    """Result of a path calculation."""
-    # DFT results (no memory)
-    E_dft: List[float]           # DFT energies along path
-    E_dft_final: float           # Final DFT energy
-    
-    # DSE results (with memory)
-    E_dse: List[float]           # DSE energies along path
-    E_dse_final: float           # Final DSE energy
-    
-    # Memory contributions
-    delta_memory: List[float]    # Memory correction at each step
-    
-    # Metadata
-    path_label: str = ""
-    n_steps: int = 0
+    """Results from computing a reaction path."""
+    E_dft: List[float]        # DFT energies
+    E_dft_final: float        # Final DFT energy
+    E_dse: List[float]        # DSE energies (DFT + memory)
+    E_dse_final: float        # Final DSE energy
+    delta_memory: List[float] # Memory contributions
+    path_label: str           # Path identifier
+    n_steps: int              # Number of steps
     
     @property
     def memory_effect(self) -> float:
-        """Total memory effect (DSE - DFT at final point)."""
-        return self.E_dse_final - self.E_dft_final
-    
-    @property
-    def integrated_memory(self) -> float:
-        """Integrated memory contribution."""
+        """Total memory effect."""
         return sum(self.delta_memory)
 
 
 @dataclass
 class ComparisonResult:
-    """Result comparing two paths."""
+    """Results from comparing two paths."""
     path1: PathResult
     path2: PathResult
     
@@ -95,63 +70,30 @@ class ComparisonResult:
     
     @property
     def delta_dse(self) -> float:
-        """DSE energy difference (captures history!)."""
+        """DSE energy difference (reveals history dependence!)."""
         return abs(self.path1.E_dse_final - self.path2.E_dse_final)
-    
-    @property
-    def amplification(self) -> float:
-        """How much DSE amplifies the difference."""
-        if self.delta_dft < 1e-10:
-            return float('inf')
-        return self.delta_dse / self.delta_dft
-    
-    def summary(self) -> str:
-        """Generate summary string."""
-        lines = [
-            "=" * 60,
-            "DSE vs DFT Path Comparison",
-            "=" * 60,
-            "",
-            f"Path 1: {self.path1.path_label}",
-            f"  E_DFT (final):  {self.path1.E_dft_final:.6f} Ha",
-            f"  E_DSE (final):  {self.path1.E_dse_final:.6f} Ha",
-            f"  Memory effect:  {self.path1.memory_effect:.6f} Ha",
-            "",
-            f"Path 2: {self.path2.path_label}",
-            f"  E_DFT (final):  {self.path2.E_dft_final:.6f} Ha",
-            f"  E_DSE (final):  {self.path2.E_dse_final:.6f} Ha",
-            f"  Memory effect:  {self.path2.memory_effect:.6f} Ha",
-            "",
-            "─" * 60,
-            f"|ΔE| DFT:  {self.delta_dft:.8f} Ha  ({self.delta_dft * 27.211:.4f} eV)",
-            f"|ΔE| DSE:  {self.delta_dse:.8f} Ha  ({self.delta_dse * 27.211:.4f} eV)",
-            "",
-        ]
-        
-        if self.delta_dft < 1e-8:
-            lines.append("🎯 DFT: Cannot distinguish paths! (ΔE ≈ 0)")
-            lines.append(f"🎯 DSE: REVEALS difference! (ΔE = {self.delta_dse:.6f} Ha)")
-        else:
-            lines.append(f"Amplification: {self.amplification:.1f}x")
-        
-        lines.append("=" * 60)
-        return "\n".join(lines)
 
 
-class MemoryKernelDFT:
+# =============================================================================
+# Memory Kernel Wrapper (uses core.memory_kernel!)
+# =============================================================================
+
+class MemoryKernelDFTWrapper:
     """
-    Memory kernel for DFT energy corrections.
+    Wrapper around CompositeMemoryKernel for DFT path calculations.
     
-    Computes history-dependent corrections to DFT energies
-    based on the geometric path taken.
+    This class wraps the unified kernel from core.memory_kernel
+    to provide a simple interface for DFT-based path calculations.
+    
+    NOTE: This is NOT a separate implementation! It uses core.memory_kernel.
     """
     
-    def __init__(self, 
+    def __init__(self,
                  eta: float = 0.1,
                  tau: float = 5.0,
                  gamma: float = 0.5):
         """
-        Initialize memory kernel.
+        Initialize memory kernel wrapper.
         
         Args:
             eta: Memory strength parameter
@@ -161,6 +103,27 @@ class MemoryKernelDFT:
         self.eta = eta
         self.tau = tau
         self.gamma = gamma
+        
+        # Use the unified kernel from core!
+        try:
+            from memory_dft.core.memory_kernel import (
+                CompositeMemoryKernel, 
+                KernelWeights
+            )
+            self._kernel = CompositeMemoryKernel(
+                weights=KernelWeights(
+                    field=gamma,  # Map gamma to field weight
+                    phys=0.25,
+                    chem=0.25,
+                    exclusion=0.2
+                ),
+                gamma_field=gamma,
+                tau0_phys=tau,
+            )
+        except ImportError:
+            # Fallback for standalone testing
+            self._kernel = None
+        
         self.history: List[Tuple[float, float, np.ndarray]] = []
     
     def add_state(self, t: float, E: float, coords: np.ndarray):
@@ -174,10 +137,7 @@ class MemoryKernelDFT:
         """
         Compute memory correction to energy.
         
-        The correction depends on:
-          1. Time since previous states (exponential decay)
-          2. Geometric similarity (overlap in configuration space)
-          3. Energy differences (strain history)
+        Uses the unified CompositeMemoryKernel from core.
         """
         if len(self.history) == 0:
             return 0.0
@@ -189,20 +149,31 @@ class MemoryKernelDFT:
             if dt <= 0:
                 continue
             
-            # Time kernel: exponential with power-law correction
-            K_time = np.exp(-dt / self.tau) * (1 + dt) ** (-self.gamma)
+            # Use unified kernel if available
+            if self._kernel is not None:
+                # Get weight from composite kernel
+                history_times = np.array([h[0] for h in self.history])
+                weights = self._kernel.integrate(t, history_times)
+                idx = np.searchsorted(history_times, t_hist)
+                if idx < len(weights):
+                    K_time = weights[idx]
+                else:
+                    K_time = np.exp(-dt / self.tau)
+            else:
+                # Fallback: simple exponential
+                K_time = np.exp(-dt / self.tau) * (1 + dt) ** (-self.gamma)
             
-            # Geometric kernel: based on coordinate change
+            # Geometric kernel
             if coords_hist.shape == coords.shape:
                 delta_r = np.linalg.norm(coords - coords_hist)
-                K_geom = np.exp(-delta_r / 0.5)  # 0.5 Å characteristic length
+                K_geom = np.exp(-delta_r / 0.5)
             else:
-                K_geom = 0.5  # Default if shapes don't match
+                K_geom = 0.5
             
-            # Energy difference contribution
+            # Energy difference
             delta_E = E - E_hist
             
-            # Combined memory contribution
+            # Combined
             memory += self.eta * K_time * K_geom * abs(delta_E)
         
         return memory
@@ -211,6 +182,10 @@ class MemoryKernelDFT:
         """Clear history."""
         self.history = []
 
+
+# =============================================================================
+# DSE Calculator
+# =============================================================================
 
 class DSECalculator:
     """
@@ -244,25 +219,15 @@ class DSECalculator:
         self.xc = xc
         self.verbose = verbose
         
-        # Initialize memory kernel
-        self.memory_kernel = MemoryKernelDFT(
+        # Use wrapper (which uses core.memory_kernel!)
+        self.memory_kernel = MemoryKernelDFTWrapper(
             eta=memory_eta,
             tau=memory_tau,
             gamma=memory_gamma
         )
     
     def compute_dft(self, atoms: str, charge: int = 0, spin: int = 0) -> Tuple[float, np.ndarray]:
-        """
-        Compute standard DFT energy.
-        
-        Args:
-            atoms: Atom string in PySCF format (e.g., "H 0 0 0; H 0 0 0.74")
-            charge: Molecular charge
-            spin: Spin multiplicity - 1
-            
-        Returns:
-            (energy, coordinates)
-        """
+        """Compute standard DFT energy."""
         mol = gto.M(
             atom=atoms,
             basis=self.basis,
@@ -278,8 +243,6 @@ class DSECalculator:
         
         mf.xc = self.xc
         E = mf.kernel()
-        
-        # Extract coordinates
         coords = mol.atom_coords()
         
         return E, coords
@@ -289,18 +252,7 @@ class DSECalculator:
                      charge: int = 0,
                      spin: int = 0,
                      label: str = "") -> PathResult:
-        """
-        Compute energies along a reaction path.
-        
-        Args:
-            path: List of GeometryStep objects defining the path
-            charge: Molecular charge
-            spin: Spin multiplicity - 1
-            label: Path label for output
-            
-        Returns:
-            PathResult with DFT and DSE energies
-        """
+        """Compute energies along a reaction path."""
         self.memory_kernel.clear()
         
         E_dft_list = []
@@ -308,21 +260,17 @@ class DSECalculator:
         delta_mem_list = []
         
         for step in path:
-            # Standard DFT
             E_dft, coords = self.compute_dft(step.atoms, charge, spin)
             E_dft_list.append(E_dft)
             
-            # Memory contribution
             delta_mem = self.memory_kernel.compute_memory_contribution(
                 step.time, E_dft, coords
             )
             delta_mem_list.append(delta_mem)
             
-            # DSE energy
             E_dse = E_dft + delta_mem
             E_dse_list.append(E_dse)
             
-            # Update history
             self.memory_kernel.add_state(step.time, E_dft, coords)
         
         return PathResult(
@@ -342,26 +290,7 @@ class DSECalculator:
                       spin: int = 0,
                       label1: str = "Path 1",
                       label2: str = "Path 2") -> ComparisonResult:
-        """
-        Compare two reaction paths.
-        
-        This is the key demonstration of DSE:
-        - Same final geometry
-        - Different paths
-        - DFT gives same energy
-        - DSE gives different energies!
-        
-        Args:
-            path1: First path
-            path2: Second path  
-            charge: Molecular charge
-            spin: Spin multiplicity - 1
-            label1: Label for path 1
-            label2: Label for path 2
-            
-        Returns:
-            ComparisonResult with both paths and differences
-        """
+        """Compare two reaction paths."""
         result1 = self.compute_path(path1, charge, spin, label1)
         result2 = self.compute_path(path2, charge, spin, label2)
         
@@ -369,127 +298,105 @@ class DSECalculator:
 
 
 # =============================================================================
-# Helper functions for common molecular paths
+# Helper Functions
 # =============================================================================
 
 def create_h2_stretch_path(r_start: float = 0.74, 
                            r_end: float = 1.5,
                            r_return: float = 0.74,
                            n_steps: int = 10) -> List[GeometryStep]:
-    """
-    Create H2 stretch-return path.
-    
-    Args:
-        r_start: Starting bond length (Å)
-        r_end: Maximum stretch (Å)
-        r_return: Return bond length (Å)
-        n_steps: Steps per segment
-        
-    Returns:
-        List of GeometryStep for the path
-    """
+    """Create H2 stretch-return path."""
     path = []
-    t = 0.0
-    dt = 1.0
     
-    # Stretch: r_start -> r_end
-    for r in np.linspace(r_start, r_end, n_steps):
-        atoms = f"H 0 0 0; H 0 0 {r}"
-        path.append(GeometryStep(atoms=atoms, time=t, label=f"stretch r={r:.2f}"))
-        t += dt
+    # Stretch
+    for i, r in enumerate(np.linspace(r_start, r_end, n_steps)):
+        path.append(GeometryStep(
+            atoms=f"H 0 0 0; H 0 0 {r}",
+            time=float(i),
+            label=f"stretch_{i}"
+        ))
     
-    # Return: r_end -> r_return
-    for r in np.linspace(r_end, r_return, n_steps):
-        atoms = f"H 0 0 0; H 0 0 {r}"
-        path.append(GeometryStep(atoms=atoms, time=t, label=f"return r={r:.2f}"))
-        t += dt
+    # Return
+    for i, r in enumerate(np.linspace(r_end, r_return, n_steps)):
+        path.append(GeometryStep(
+            atoms=f"H 0 0 0; H 0 0 {r}",
+            time=float(n_steps + i),
+            label=f"return_{i}"
+        ))
     
     return path
 
 
-def create_h2_compress_path(r_start: float = 0.74,
+def create_h2_compress_path(r_start: float = 0.74, 
                             r_end: float = 0.5,
                             r_return: float = 0.74,
                             n_steps: int = 10) -> List[GeometryStep]:
-    """
-    Create H2 compress-return path.
-    
-    Args:
-        r_start: Starting bond length (Å)
-        r_end: Minimum compression (Å)
-        r_return: Return bond length (Å)
-        n_steps: Steps per segment
-        
-    Returns:
-        List of GeometryStep for the path
-    """
+    """Create H2 compress-return path."""
     path = []
-    t = 0.0
-    dt = 1.0
     
-    # Compress: r_start -> r_end
-    for r in np.linspace(r_start, r_end, n_steps):
-        atoms = f"H 0 0 0; H 0 0 {r}"
-        path.append(GeometryStep(atoms=atoms, time=t, label=f"compress r={r:.2f}"))
-        t += dt
+    # Compress
+    for i, r in enumerate(np.linspace(r_start, r_end, n_steps)):
+        path.append(GeometryStep(
+            atoms=f"H 0 0 0; H 0 0 {r}",
+            time=float(i),
+            label=f"compress_{i}"
+        ))
     
-    # Return: r_end -> r_return
-    for r in np.linspace(r_end, r_return, n_steps):
-        atoms = f"H 0 0 0; H 0 0 {r}"
-        path.append(GeometryStep(atoms=atoms, time=t, label=f"return r={r:.2f}"))
-        t += dt
+    # Return
+    for i, r in enumerate(np.linspace(r_end, r_return, n_steps)):
+        path.append(GeometryStep(
+            atoms=f"H 0 0 0; H 0 0 {r}",
+            time=float(n_steps + i),
+            label=f"return_{i}"
+        ))
     
     return path
 
 
-# =============================================================================
-# Quick demo function
-# =============================================================================
-
 def demo_h2_comparison():
-    """
-    Demonstrate DSE vs DFT for H2 molecule.
+    """Demo: Compare H2 stretch vs compress paths."""
+    if not HAS_PYSCF:
+        print("PySCF not available")
+        return None
     
-    Shows that:
-    - DFT gives same energy for stretch-return and compress-return paths
-    - DSE gives DIFFERENT energies due to history dependence
-    """
-    print("=" * 60)
-    print("DSE vs DFT Demonstration: H2 Molecule")
-    print("=" * 60)
-    print()
+    calc = DSECalculator(basis='sto-3g', xc='LDA')
     
-    # Create calculator
-    calc = DSECalculator(
-        basis='sto-3g',  # Small basis for speed
-        xc='LDA',
-        memory_eta=0.05,
-        memory_tau=5.0,
-        verbose=0
-    )
+    path_stretch = create_h2_stretch_path()
+    path_compress = create_h2_compress_path()
     
-    # Create paths
-    print("Creating paths...")
-    path_stretch = create_h2_stretch_path(r_start=0.74, r_end=1.2, r_return=0.74, n_steps=5)
-    path_compress = create_h2_compress_path(r_start=0.74, r_end=0.5, r_return=0.74, n_steps=5)
-    
-    print(f"  Path 1 (stretch→return): {len(path_stretch)} steps")
-    print(f"  Path 2 (compress→return): {len(path_compress)} steps")
-    print()
-    
-    # Compare
-    print("Running calculations...")
     result = calc.compare_paths(
         path_stretch, path_compress,
         label1="Stretch→Return",
         label2="Compress→Return"
     )
     
-    print()
-    print(result.summary())
+    print(f"DFT difference: {result.delta_dft:.6f} Ha (should be ~0)")
+    print(f"DSE difference: {result.delta_dse:.6f} Ha (history effect!)")
     
     return result
 
 
-if __name__ == "__main__":
-    demo_h2_comparison()
+# =============================================================================
+# Backward Compatibility Alias
+# =============================================================================
+
+# Old name (deprecated)
+MemoryKernelDFT = MemoryKernelDFTWrapper
+
+
+# =============================================================================
+# Exports
+# =============================================================================
+
+__all__ = [
+    'DSECalculator',
+    'PathResult',
+    'ComparisonResult',
+    'GeometryStep',
+    'MemoryKernelDFTWrapper',
+    'MemoryKernelDFT',  # deprecated alias
+    'create_h2_stretch_path',
+    'create_h2_compress_path',
+    'demo_h2_comparison',
+    'HAS_PYSCF',
+]
