@@ -82,9 +82,18 @@ def info():
     # Check GPU
     try:
         import cupy as cp
-        gpu_info = f"✅ Available ({cp.cuda.Device().name.decode()})"
-    except:
-        gpu_info = "❌ Not available (CPU mode)"
+        if cp.cuda.is_available():
+            # CuPy 13.x: use runtime API
+            device_id = cp.cuda.Device().id
+            props = cp.cuda.runtime.getDeviceProperties(device_id)
+            device_name = props.get('name', f'GPU {device_id}')
+            if isinstance(device_name, bytes):
+                device_name = device_name.decode()
+            gpu_info = f"✅ Available ({device_name})"
+        else:
+            gpu_info = "❌ Not available (CPU mode)"
+    except Exception as e:
+        gpu_info = f"❌ Not available (CPU mode)"
     
     typer.echo("🖥️  GPU Status")
     typer.echo("─" * 50)
