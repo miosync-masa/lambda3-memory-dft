@@ -1,8 +1,9 @@
 """
-Thermal Command - True Thermal-DSE Implementation
-==================================================
+Thermal Command - True Thermal-DSE Implementation (Unified Engine)
+===================================================================
 
 Demonstrates temperature-path dependence using Direct Schrödinger Evolution.
+Uses unified SparseEngine for all operations.
 
 Core insight (Appendix G):
   - Path A: T_low → T_high → T_final (heat then cool)
@@ -33,97 +34,96 @@ from ..utils import (
 
 
 # =============================================================================
-# Thermal-DSE Runner (Real Implementation)
+# Thermal-DSE Runner (Using Unified SparseEngine)
 # =============================================================================
 
 class ThermalDSERunner:
     """
-    True Thermal-DSE implementation.
+    True Thermal-DSE implementation using unified SparseEngine.
     
     Uses Hubbard model with:
     1. Exact diagonalization for eigenstates
     2. Boltzmann weights for thermal averaging
     3. Time evolution along temperature paths
     4. λ(T) = K(T)/|V(T)| stability parameter
+    
+    Benefits from SparseEngine:
+    - Automatic GPU/CPU backend
+    - Unified operator construction
+    - Consistent λ calculation
     """
     
     def __init__(self, n_sites: int = 4, t_hop: float = 1.0, U_int: float = 2.0,
                  n_eigenstates: int = 14, energy_scale: float = 0.1,
-                 verbose: bool = True):
+                 use_gpu: bool = True, verbose: bool = True):
         self.n_sites = n_sites
         self.dim = 2 ** n_sites
         self.t_hop = t_hop
         self.U_int = U_int
         self.n_eigenstates = min(n_eigenstates, self.dim - 2)
-        self.energy_scale = energy_scale  # Energy scale for β calculation
+        self.energy_scale = energy_scale
         self.verbose = verbose
         
         # Boltzmann constant in eV/K
         self.K_B_EV = 8.617333262e-5
         
-        # Import required modules
+        # Import unified engine
         try:
-            import scipy.sparse as sp
-            from scipy.sparse.linalg import eigsh
-            self.sp = sp
-            self.eigsh = eigsh
+            from memory_dft.core.sparse_engine_unified import SparseEngine
+            self.SparseEngine = SparseEngine
         except ImportError as e:
-            raise ImportError(f"SciPy required: {e}")
+            raise ImportError(f"Could not import SparseEngine: {e}")
         
-        # Build and diagonalize
+        # Build engine with chain geometry
+        self.engine = self.SparseEngine(n_sites, use_gpu=use_gpu, verbose=False)
+        self.geometry = self.engine.build_chain(periodic=False)
+        
+        # Build Hubbard Hamiltonian
         self._build_hubbard()
         self._diagonalize()
+        
+        if verbose:
+            print(f"  Thermal-DSE: {n_sites} sites, t={t_hop}, U={U_int}")
+            print(f"  Backend: {'GPU' if self.engine.use_gpu else 'CPU'}")
     
     def _build_hubbard(self):
-        """Build Hubbard Hamiltonian H = H_K + H_V."""
-        L = self.n_sites
-        sp = self.sp
-        
-        # Sparse operators
-        I = sp.eye(2, format='csr', dtype=np.complex128)
-        Sp = sp.csr_matrix([[0, 1], [0, 0]], dtype=np.complex128)
-        Sm = sp.csr_matrix([[0, 0], [1, 0]], dtype=np.complex128)
-        n_op = sp.csr_matrix([[0, 0], [0, 1]], dtype=np.complex128)
-        
-        def site_op(op, site):
-            ops = [I] * L
-            ops[site] = op
-            result = ops[0]
-            for i in range(1, L):
-                result = sp.kron(result, ops[i], format='csr')
-            return result
-        
-        # H_K (hopping/kinetic)
-        H_K = sp.csr_matrix((self.dim, self.dim), dtype=np.complex128)
-        for i in range(L - 1):
-            j = i + 1
-            H_K += -self.t_hop * (site_op(Sp, i) @ site_op(Sm, j) + 
-                                  site_op(Sm, i) @ site_op(Sp, j))
-        
-        # H_V (interaction/potential)
-        H_V = sp.csr_matrix((self.dim, self.dim), dtype=np.complex128)
-        for i in range(L - 1):
-            j = i + 1
-            H_V += self.U_int * site_op(n_op, i) @ site_op(n_op, j)
-        
-        self.H_K = H_K
-        self.H_V = H_V
-        self.H = H_K + H_V
+        """Build Hubbard Hamiltonian H = H_K + H_V using engine."""
+        bonds = self.geometry.bonds
+        self.H_K, self.H_V = self.engine.build_hubbard(
+            bonds, t=self.t_hop, U=self.U_int, split_KV=True
+        )
+        self.H = self.H_K + self.H_V
         
         if self.verbose:
-            print(f"  Built Hubbard: {L} sites, t={self.t_hop}, U={self.U_int}")
+            print(f"  Built Hubbard: {self.n_sites} sites, t={self.t_hop}, U={self.U_int}")
     
     def _diagonalize(self):
         """Compute low-energy eigenstates."""
-        eigenvalues, eigenvectors = self.eigsh(
-            self.H, k=self.n_eigenstates, which='SA'
-        )
+        xp = self.engine.xp
+        
+        try:
+            eigenvalues, eigenvectors = self.engine.eigsh(
+                self.H, k=self.n_eigenstates, which='SA'
+            )
+            if self.engine.use_gpu:
+                eigenvalues = eigenvalues.get()
+                eigenvectors = eigenvectors.get()
+        except Exception:
+            # Fallback to dense
+            if self.engine.use_gpu:
+                H_dense = self.H.toarray().get()
+            else:
+                H_dense = self.H.toarray()
+            eigenvalues, eigenvectors = np.linalg.eigh(H_dense)
+            eigenvalues = eigenvalues[:self.n_eigenstates]
+            eigenvectors = eigenvectors[:, :self.n_eigenstates]
+        
         idx = np.argsort(eigenvalues)
         self.eigenvalues = eigenvalues[idx]
         self.eigenvectors = eigenvectors[:, idx]
         
         if self.verbose:
-            gap = self.eigenvalues[1] - self.eigenvalues[0]
+            gap = self.eigenvalues[1] - self.eigenvalues[0] if len(self.eigenvalues) > 1 else 0
             print(f"  Diagonalized: {self.n_eigenstates} states")
             print(f"  E_0 = {self.eigenvalues[0]:.4f}, Gap = {gap:.4f}")
     
@@ -158,7 +158,7 @@ class ThermalDSERunner:
         K_total = 0.0
         V_total = 0.0
         
-        for n in range(self.n_eigenstates):
+        for n in range(len(self.eigenvalues)):
             psi = self.eigenvectors[:, n]
             w = weights[n]
             
@@ -191,6 +191,22 @@ class ThermalDSERunner:
         weights = self.boltzmann_weights(beta)
         return int(np.sum(weights > threshold))
     
+    def time_evolve(self, psi: np.ndarray, dt: float) -> np.ndarray:
+        """Time evolution: |ψ(t+dt)⟩ = exp(-iHdt)|ψ(t)⟩."""
+        try:
+            from memory_dft.solvers import lanczos_expm_multiply
+            return lanczos_expm_multiply(self.H, psi, dt, krylov_dim=20)
+        except ImportError:
+            from scipy.linalg import expm
+            if self.engine.use_gpu:
+                H_dense = self.H.toarray().get()
+                psi_np = psi.get() if hasattr(psi, 'get') else psi
+            else:
+                H_dense = self.H.toarray()
+                psi_np = psi
+            U = expm(-1j * H_dense * dt)
+            return U @ psi_np
+    
     def evolve_path(self, temperatures: List[float], 
                     dt: float = 0.1, steps_per_T: int = 10) -> Dict[str, Any]:
         """
@@ -208,13 +224,6 @@ class ThermalDSERunner:
         Returns:
             Dictionary with evolution results
         """
-        # Try to import Lanczos solver
-        try:
-            from memory_dft.solvers import lanczos_expm_multiply
-            use_lanczos = True
-        except ImportError:
-            use_lanczos = False
-        
         # Initialize with thermal state at first temperature
         T0 = temperatures[0]
         beta0 = self.T_to_beta(T0)
@@ -235,8 +244,6 @@ class ThermalDSERunner:
         t = 0.0
         
         for T in temperatures:
-            beta = self.T_to_beta(T)
-            
             for step in range(steps_per_T):
                 # Compute current λ(T)
                 K_total = 0.0
@@ -256,17 +263,10 @@ class ThermalDSERunner:
                 lambdas.append(lam)
                 entropies.append(S)
                 
-                # Time evolution: |ψ(t+dt)⟩ = exp(-iHdt/ℏ)|ψ(t)⟩
+                # Time evolution
                 for i in range(len(evolved_psis)):
-                    if use_lanczos:
-                        evolved_psis[i] = lanczos_expm_multiply(
-                            self.H, evolved_psis[i], dt, krylov_dim=20
-                        )
-                    else:
-                        # Simple matrix exponential (dense, slow but works)
-                        from scipy.linalg import expm
-                        U = expm(-1j * self.H.toarray() * dt)
-                        evolved_psis[i] = U @ evolved_psis[i]
+                    evolved_psis[i] = self.time_evolve(evolved_psis[i], dt)
+                    evolved_psis[i] = evolved_psis[i] / np.linalg.norm(evolved_psis[i])
                 
                 t += dt
         
@@ -357,11 +357,12 @@ def thermal(
                                         help="Energy scale for β (eV). 0.1=organic, 1.0=metal"),
     n_states: int = typer.Option(14, "--states", help="Number of eigenstates"),
     steps: int = typer.Option(5, "--steps", help="Steps per temperature segment"),
+    gpu: bool = typer.Option(True, "--gpu/--no-gpu", help="Use GPU if available"),
     output: Optional[Path] = typer.Option(None, "-o", "--output", 
                                           help="Output JSON file"),
 ):
     """
-    Thermal-DSE: Temperature path dependence demonstration.
+    Thermal-DSE: Temperature path dependence demonstration (Unified SparseEngine).
     
     Shows that heating→cooling vs cooling→heating paths
     lead to DIFFERENT quantum states at the same final temperature.
@@ -389,6 +390,7 @@ def thermal(
             U_int=u_int,
             n_eigenstates=n_states,
             energy_scale=energy_scale,
+            use_gpu=gpu,
             verbose=True
         )
     except Exception as e:
