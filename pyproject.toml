@@ -62,7 +62,7 @@ dev = [
 ]
 
 [project.scripts]
-memory-dft = "cli:main"
+memory-dft = "memory_dft.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/miosync-masa/lambda3-memory-dft"
