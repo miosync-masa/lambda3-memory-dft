@@ -879,67 +879,147 @@ def lattice(
         'V_0': V_0,
     }
     
-    # Path comparison (for Kitaev)
-    if path_compare and model == 'kitaev':
+    # Path comparison - External field application order (Paper Appendix H)
+    if path_compare:
         typer.echo()
         typer.echo("=" * 50)
-        typer.echo("🔀 PATH COMPARISON (Kitaev)")
+        typer.echo("🔀 PATH COMPARISON (External Field Order)")
         typer.echo("=" * 50)
+        typer.echo("\n  Method: Same final fields, different application order")
+        typer.echo("  Reference: Appendix H (Ladder-DSE)")
         
+        # Build base Hamiltonian
+        if model == 'kitaev':
+            H_base = builder.kitaev_rect(Kx=kx, Ky=ky, Kz_diag=kz)
+        elif model == 'heisenberg':
+            H_base = builder.heisenberg(J=j)
+        elif model == 'ising':
+            H_base = builder.ising(J=j, h=0)  # h=0, add external field manually
+        else:
+            H_base = builder.heisenberg(J=j)
+        
+        # Define perturbation sites
+        # For Lx x Ly lattice: corner=0, center=Lx*Ly//2
+        site_corner = 0
+        site_center = (lx * ly) // 2
+        
+        # External field strengths (from paper)
+        Bx_strength = 0.5
+        Bz_strength = 0.3
+        
+        # Build field operators
+        Sx_corner = ops.get_operator('X', site_corner)
+        Sz_center = ops.get_operator('Z', site_center)
+        
+        # Time parameters
         dt = 0.1
-        steps = 10
+        t_total = 8.0
+        t_first = 2.0
+        t_second = 5.0
         
-        # Path A: Kx-dominated → isotropic
-        typer.echo("\n📍 Path A: Kx-dominated → isotropic")
-        path_A_params = [
-            {'Kx': 1.5, 'Ky': 0.5, 'Kz_diag': 0.0},
-            {'Kx': 1.0, 'Ky': 1.0, 'Kz_diag': 0.0},
-        ]
+        typer.echo(f"\n  Perturbation sites: corner={site_corner}, center={site_center}")
+        typer.echo(f"  Field strengths: Bx={Bx_strength}, Bz={Bz_strength}")
         
-        H_A = builder.kitaev_rect(**path_A_params[0])
-        E_A, psi_A = eigsh(H_A, k=1, which='SA')
-        psi_A = psi_A[:, 0]
+        # =====================================================
+        # Path A: Corner → Center (site 0 first, then site center)
+        # =====================================================
+        typer.echo("\n📍 Path A: Corner → Center")
+        typer.echo(f"    t={t_first}: site {site_corner} (corner), Bx={Bx_strength}")
+        typer.echo(f"    t={t_second}: site {site_center} (center), Bz={Bz_strength}")
         
-        for params in path_A_params:
-            H_A = builder.kitaev_rect(**params)
-            for _ in range(steps):
-                psi_A = lanczos_expm_multiply(H_A, psi_A, dt)
+        # Start from ground state of base Hamiltonian
+        _, psi_A = eigsh(H_base, k=1, which='SA')
+        psi_A = psi_A[:, 0].astype(np.complex128)
+        
+        t = 0.0
+        field_A_active = {'corner': False, 'center': False}
+        
+        while t < t_total:
+            # Activate fields at appropriate times
+            H_current = H_base.copy()
+            
+            if t >= t_first:
+                H_current = H_current + Bx_strength * Sx_corner
+                field_A_active['corner'] = True
+            if t >= t_second:
+                H_current = H_current + Bz_strength * Sz_center
+                field_A_active['center'] = True
+            
+            # Time evolution
+            psi_A = lanczos_expm_multiply(H_current, psi_A, dt)
+            t += dt
         
         V_A = float(np.real(np.vdot(psi_A, V_op @ psi_A)))
         typer.echo(f"  Final vorticity: {V_A:.6f}")
         
-        # Path B: Ky-dominated → isotropic
-        typer.echo("\n📍 Path B: Ky-dominated → isotropic")
-        path_B_params = [
-            {'Kx': 0.5, 'Ky': 1.5, 'Kz_diag': 0.0},
-            {'Kx': 1.0, 'Ky': 1.0, 'Kz_diag': 0.0},
-        ]
+        # =====================================================
+        # Path B: Center → Corner (site center first, then site 0)
+        # =====================================================
+        typer.echo("\n📍 Path B: Center → Corner")
+        typer.echo(f"    t={t_first}: site {site_center} (center), Bz={Bz_strength}")
+        typer.echo(f"    t={t_second}: site {site_corner} (corner), Bx={Bx_strength}")
         
-        H_B = builder.kitaev_rect(**path_B_params[0])
-        E_B, psi_B = eigsh(H_B, k=1, which='SA')
-        psi_B = psi_B[:, 0]
+        # Start from same ground state
+        _, psi_B = eigsh(H_base, k=1, which='SA')
+        psi_B = psi_B[:, 0].astype(np.complex128)
         
-        for params in path_B_params:
-            H_B = builder.kitaev_rect(**params)
-            for _ in range(steps):
-                psi_B = lanczos_expm_multiply(H_B, psi_B, dt)
+        t = 0.0
+        field_B_active = {'corner': False, 'center': False}
+        
+        while t < t_total:
+            # Activate fields at appropriate times (REVERSED ORDER!)
+            H_current = H_base.copy()
+            
+            if t >= t_first:
+                H_current = H_current + Bz_strength * Sz_center  # Center FIRST
+                field_B_active['center'] = True
+            if t >= t_second:
+                H_current = H_current + Bx_strength * Sx_corner  # Corner SECOND
+                field_B_active['corner'] = True
+            
+            # Time evolution
+            psi_B = lanczos_expm_multiply(H_current, psi_B, dt)
+            t += dt
         
         V_B = float(np.real(np.vdot(psi_B, V_op @ psi_B)))
         typer.echo(f"  Final vorticity: {V_B:.6f}")
         
+        # =====================================================
+        # Compare
+        # =====================================================
         delta_V = abs(V_A - V_B)
         
         typer.echo()
         typer.echo("─" * 50)
-        typer.echo(f"  |ΔV| = {delta_V:.6f}")
+        typer.echo("  📊 RESULTS")
+        typer.echo("─" * 50)
+        typer.echo(f"  Path A vorticity: {V_A:.6f}")
+        typer.echo(f"  Path B vorticity: {V_B:.6f}")
+        typer.echo(f"  |ΔV| (DSE):       {delta_V:.6f}")
+        typer.echo(f"  |ΔV| (DFT):       0.000000  (by construction)")
         
-        if delta_V > 1e-6:
+        if delta_V > 1e-4:
             typer.echo()
             typer.echo("  🎯 PATH DEPENDENCE DETECTED!")
-            typer.echo("  → Same final H, different history → Different vorticity")
-            typer.echo("  → Memoryless approach sees ΔV ≡ 0")
+            typer.echo("  → Same final fields, different order → Different vorticity")
+            typer.echo("  → DFT predicts ΔV ≡ 0, DSE reveals ΔV ≠ 0")
+        elif delta_V > 1e-6:
+            typer.echo()
+            typer.echo("  ⚠️ Weak path dependence detected")
+        else:
+            typer.echo()
+            typer.echo("  ℹ️ No significant path dependence for this model")
+            typer.echo("  (High-symmetry models may have cancellations)")
         
-        results['path_compare'] = {'V_A': V_A, 'V_B': V_B, 'delta_V': delta_V}
+        results['path_compare'] = {
+            'method': 'external_field_order',
+            'site_corner': site_corner,
+            'site_center': site_center,
+            'V_A': V_A,
+            'V_B': V_B,
+            'delta_V': delta_V,
+            'delta_V_DFT': 0.0,
+        }
     
     if output:
         output.write_text(json.dumps(results, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else x))
