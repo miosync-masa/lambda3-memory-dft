@@ -1086,7 +1086,7 @@ def thermal(
     
     # Build Hubbard model
     typer.echo("Building Hubbard model...")
-    engine = HubbardEngine(L=sites, use_gpu=False, verbose=False)
+    engine = HubbardEngine(L=sites, verbose=False)
     result = engine.compute_full(t=1.0, U=u)
     eigenvalues = engine.eigenvalues
     eigenvectors = engine.eigenvectors
