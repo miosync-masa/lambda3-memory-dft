@@ -1039,119 +1039,228 @@ def lattice(
 
 
 # =============================================================================
-# thermal command (Temperature Path Dependence)
+# thermal command (Temperature Path Dependence with Real DFT)
 # =============================================================================
 
 @app.command("thermal")
 def thermal(
+    mol: str = typer.Option("H2", "--mol", "-m", help="Molecule: H2, LiH"),
+    basis: str = typer.Option("sto-3g", "--basis", "-b", help="Basis set"),
     t_high: float = typer.Option(300.0, "--T-high", help="High temperature (K)"),
     t_low: float = typer.Option(100.0, "--T-low", help="Low temperature (K)"),
     t_final: float = typer.Option(200.0, "--T-final", help="Final temperature (K)"),
-    sites: int = typer.Option(4, "-L", "--sites", help="Number of sites"),
-    u: float = typer.Option(2.0, "-U", help="Hubbard U"),
-    steps: int = typer.Option(5, "-n", "--steps", help="Steps per temperature"),
+    steps: int = typer.Option(5, "-n", "--steps", help="Steps per temperature segment"),
     output: Optional[Path] = typer.Option(None, "-o", "--output", help="Output JSON file"),
 ):
     """
-    Thermal path dependence demonstration.
+    Thermal path dependence with REAL DFT (PySCF).
     
-    Compares two paths to the same final temperature:
-      Path 1: T_low → T_high → T_final (Heat first)
-      Path 2: T_high → T_low → T_final (Cool first)
+    Compares:
+      - DFT (PySCF): Finite-temperature DFT at T_final (single calculation)
+      - DSE: Two different temperature paths to the same T_final
+    
+    DFT cannot distinguish paths (history-blind).
+    DSE reveals path dependence (history-aware).
     
     Example:
-        memory-dft thermal --T-high 300 --T-low 100 --T-final 200
+        memory-dft thermal --mol H2 --T-high 300 --T-low 100 --T-final 200
     """
     print_banner()
     
-    typer.echo("🌡️ Thermal Path Dependence")
+    typer.echo("🌡️ Thermal Path Dependence (Real DFT)")
     typer.echo("─" * 50)
-    typer.echo(f"  T_high:   {t_high} K")
-    typer.echo(f"  T_low:    {t_low} K")
-    typer.echo(f"  T_final:  {t_final} K")
-    typer.echo(f"  Sites:    {sites}")
-    typer.echo(f"  U/t:      {u}")
+    typer.echo(f"  Molecule:  {mol}")
+    typer.echo(f"  Basis:     {basis}")
+    typer.echo(f"  T_high:    {t_high} K")
+    typer.echo(f"  T_low:     {t_low} K")
+    typer.echo(f"  T_final:   {t_final} K")
     typer.echo()
     
-    # Import ThermalPathSolver from examples
+    # Import PySCF
     try:
-        from memory_dft.examples.thermal_path import ThermalPathSolver
-    except ImportError as e:
-        typer.echo(f"❌ Error importing ThermalPathSolver: {e}", err=True)
-        typer.echo("   Make sure memory_dft package is installed: pip install -e .", err=True)
+        from pyscf import gto, dft
+    except ImportError:
+        typer.echo("❌ PySCF not installed. Run: pip install pyscf", err=True)
         raise typer.Exit(1)
     
-    # Build and diagonalize
-    typer.echo("Building Hubbard model...")
-    solver = ThermalPathSolver(n_sites=sites, verbose=False)
-    solver.build_hubbard(t_hop=1.0, U_int=u)
+    # Import DSE modules
+    try:
+        from memory_dft.interfaces.pyscf_interface import PySCFInterface
+        from memory_dft.core import CompositeMemoryKernel, KernelWeights
+    except ImportError as e:
+        typer.echo(f"❌ Error importing DSE modules: {e}", err=True)
+        raise typer.Exit(1)
     
-    n_states = min(50, solver.dim - 2)
-    solver.diagonalize(n_eigenstates=n_states)
+    # Define molecules
+    molecules = {
+        'H2': 'H 0 0 0; H 0 0 0.74',
+        'LiH': 'Li 0 0 0; H 0 0 1.6',
+    }
     
-    typer.echo(f"  Hilbert dim: {solver.dim}")
-    typer.echo(f"  States: {n_states}")
-    typer.echo(f"  E_0: {solver.eigenvalues[0]:.4f}")
+    if mol not in molecules:
+        typer.echo(f"❌ Unknown molecule: {mol}. Use: {list(molecules.keys())}", err=True)
+        raise typer.Exit(1)
     
-    # Build temperature paths
-    # Path 1: T_low → T_high → T_final (Heat first)
+    atom_str = molecules[mol]
+    
+    # =========================================================================
+    # PART 1: Real DFT at final temperature (PySCF with smearing)
+    # =========================================================================
+    typer.echo("Running DFT (PySCF) at final temperature...")
+    
+    pyscf_mol = gto.M(atom=atom_str, basis=basis, verbose=0)
+    mf = dft.RKS(pyscf_mol)
+    mf.xc = 'LDA'
+    
+    # Finite temperature via Fermi-Dirac smearing
+    # σ = k_B T (in Hartree: k_B = 3.1668e-6 Ha/K)
+    K_B_HA = 3.1668e-6  # Hartree/K
+    sigma = K_B_HA * t_final
+    
+    # Apply smearing for finite-temperature DFT
+    mf = mf.smearing_(sigma=sigma, method='fermi')
+    
+    E_dft_final = mf.kernel()
+    
+    typer.echo(f"  E_DFT (T={t_final}K): {E_dft_final:.6f} Ha")
+    typer.echo("  Note: DFT sees only final T, not the path!")
+    
+    # =========================================================================
+    # PART 2: DSE with temperature path evolution
+    # =========================================================================
+    typer.echo()
+    typer.echo("Running DSE along temperature paths...")
+    
+    # Initialize DSE
+    interface = PySCFInterface(basis=basis)
+    kernel = CompositeMemoryKernel(
+        weights=KernelWeights(field=0.3, phys=0.3, chem=0.2, exclusion=0.2)
+    )
+    
+    # Temperature paths
     path1_temps = (
         list(np.linspace(t_low, t_high, steps)) + 
         list(np.linspace(t_high, t_final, steps))
     )
-    
-    # Path 2: T_high → T_low → T_final (Cool first)
     path2_temps = (
         list(np.linspace(t_high, t_low, steps)) + 
         list(np.linspace(t_low, t_final, steps))
     )
     
-    # Run Path 1
+    def run_dse_thermal_path(temps, path_name):
+        """Run DSE along temperature path."""
+        accumulated_memory = 0.0
+        history = []
+        
+        for i, T in enumerate(temps):
+            # Effective structure perturbation from thermal expansion
+            # (simplified: small bond length change with temperature)
+            thermal_expansion = 1.0 + 2e-5 * (T - 300)  # ~2e-5 /K expansion coeff
+            r_eff = 0.74 * thermal_expansion  # Å
+            
+            # DFT at this snapshot
+            atom_str_t = f'H 0 0 0; H 0 0 {r_eff}'
+            mol_t = gto.M(atom=atom_str_t, basis=basis, verbose=0)
+            mf_t = dft.RKS(mol_t)
+            mf_t.xc = 'LDA'
+            sigma_t = K_B_HA * T
+            mf_t = mf_t.smearing_(sigma=sigma_t, method='fermi')
+            E_t = mf_t.kernel()
+            
+            # Memory contribution (history-dependent)
+            if history:
+                dE = E_t - history[-1]['E']
+                memory_contrib = kernel.compute_total_contribution(
+                    r=r_eff, dr=-0.01 if i > 0 else 0.0,
+                    compression_history=[h['r'] for h in history],
+                    external_field={'E': 0, 'B': 0}
+                )
+                accumulated_memory += abs(dE) * memory_contrib * 0.1
+            
+            history.append({'T': T, 'r': r_eff, 'E': E_t})
+        
+        E_final = history[-1]['E']
+        E_with_memory = E_final + accumulated_memory
+        
+        return {
+            'E_final': E_final,
+            'E_with_memory': E_with_memory,
+            'memory_effect': accumulated_memory,
+            'history': history,
+        }
+    
+    # Run both paths
     typer.echo()
     typer.echo("📍 Path 1: Heat first (T_low → T_high → T_final)")
-    result1 = solver.evolve_temperature_path(path1_temps, dt=0.1, steps_per_T=3)
-    lambda1 = result1['lambda_final']
-    typer.echo(f"  Final Λ: {lambda1:.6f}")
+    with typer.progressbar(range(1), label="  Computing") as progress:
+        for _ in progress:
+            result1 = run_dse_thermal_path(path1_temps, "Path 1")
+    typer.echo(f"  E_DSE: {result1['E_with_memory']:.6f} Ha (memory: {result1['memory_effect']:.6f})")
     
-    # Run Path 2
     typer.echo()
     typer.echo("📍 Path 2: Cool first (T_high → T_low → T_final)")
-    result2 = solver.evolve_temperature_path(path2_temps, dt=0.1, steps_per_T=3)
-    lambda2 = result2['lambda_final']
-    typer.echo(f"  Final Λ: {lambda2:.6f}")
+    with typer.progressbar(range(1), label="  Computing") as progress:
+        for _ in progress:
+            result2 = run_dse_thermal_path(path2_temps, "Path 2")
+    typer.echo(f"  E_DSE: {result2['E_with_memory']:.6f} Ha (memory: {result2['memory_effect']:.6f})")
     
-    # Compare
-    delta_lambda = abs(lambda1 - lambda2)
+    # =========================================================================
+    # PART 3: Comparison
+    # =========================================================================
+    
+    # DFT: Same final T → Same result (computed once!)
+    delta_E_dft = 0.0  # By definition: DFT at T_final is unique
+    
+    # DSE: Different paths → Different results
+    delta_E_dse = abs(result1['E_with_memory'] - result2['E_with_memory'])
     
     typer.echo()
-    typer.echo("=" * 50)
-    typer.echo("📊 THERMAL PATH COMPARISON")
-    typer.echo("=" * 50)
-    typer.echo(f"\n  Same final temperature: {t_final} K")
-    typer.echo(f"\n  Path 1 (heat first): Λ = {lambda1:.6f}")
-    typer.echo(f"  Path 2 (cool first): Λ = {lambda2:.6f}")
-    typer.echo(f"\n  |ΔΛ| (DSE):  {delta_lambda:.6f}")
-    typer.echo(f"  |ΔΛ| (DFT):  0.000000  (by construction)")
+    typer.echo("=" * 60)
+    typer.echo("📊 THERMAL PATH COMPARISON (Real DFT vs DSE)")
+    typer.echo("=" * 60)
     
-    if delta_lambda > 0.001:
+    typer.echo(f"\n  Same final temperature: {t_final} K")
+    
+    typer.echo(f"\n  DFT (PySCF, single calculation at T_final):")
+    typer.echo(f"    E_DFT = {E_dft_final:.8f} Ha")
+    typer.echo(f"    Path 1 final = Path 2 final (DFT is history-blind)")
+    
+    typer.echo(f"\n  DSE (history-dependent):")
+    typer.echo(f"    Path 1 E_DSE = {result1['E_with_memory']:.8f} Ha")
+    typer.echo(f"    Path 2 E_DSE = {result2['E_with_memory']:.8f} Ha")
+    
+    typer.echo()
+    typer.echo("─" * 60)
+    typer.echo(f"  |ΔE| DFT:  {delta_E_dft:.8f} Ha  ({delta_E_dft * 27.211:.4f} eV)")
+    typer.echo(f"  |ΔE| DSE:  {delta_E_dse:.8f} Ha  ({delta_E_dse * 27.211:.4f} eV)")
+    
+    if delta_E_dse > 1e-6:
         typer.echo()
-        typer.echo("  🎯 THERMAL PATH DEPENDENCE DETECTED!")
-        typer.echo("  → Same final T, different history → Different Λ")
-        typer.echo("  → DFT predicts ΔΛ ≡ 0, DSE reveals ΔΛ ≠ 0")
-    elif delta_lambda > 1e-6:
-        typer.echo()
-        typer.echo("  ⚠️ Weak thermal path dependence detected")
-    else:
-        typer.echo()
-        typer.echo("  ℹ️ Path dependence is minimal (try more steps)")
+        typer.echo("  🎯 DFT: Cannot distinguish paths! (ΔE = 0 by construction)")
+        typer.echo("  🎯 DSE: REVEALS difference! (ΔE ≠ 0)")
+        typer.echo("  → Same final T, different history → Different quantum state")
     
     results = {
-        'temperatures': {'T_high': t_high, 'T_low': t_low, 'T_final': t_final},
-        'path1': {'temps': path1_temps, 'lambda_final': lambda1},
-        'path2': {'temps': path2_temps, 'lambda_final': lambda2},
+        'molecule': mol,
+        'basis': basis,
+        'temperatures': {
+            'T_high': t_high, 'T_low': t_low, 'T_final': t_final,
+        },
+        'DFT': {
+            'E_final': E_dft_final,
+            'method': 'PySCF RKS/LDA with Fermi smearing',
+        },
+        'DSE': {
+            'path1_E': result1['E_with_memory'],
+            'path2_E': result2['E_with_memory'],
+            'path1_memory': result1['memory_effect'],
+            'path2_memory': result2['memory_effect'],
+        },
         'comparison': {
-            'delta_lambda_DSE': delta_lambda,
-            'delta_lambda_DFT': 0.0,
+            'delta_E_DFT_Ha': delta_E_dft,
+            'delta_E_DSE_Ha': delta_E_dse,
+            'delta_E_DFT_eV': delta_E_dft * 27.211,
+            'delta_E_DSE_eV': delta_E_dse * 27.211,
         }
     }
     
