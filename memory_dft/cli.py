@@ -1083,12 +1083,11 @@ def thermal(
         typer.echo("❌ PySCF not installed. Run: pip install pyscf", err=True)
         raise typer.Exit(1)
     
-    # Import DSE modules
+    # Import DSE memory kernel from core (NOT from pyscf_interface!)
     try:
-        from memory_dft.interfaces.pyscf_interface import PySCFInterface
-        from memory_dft.core import CompositeMemoryKernel, KernelWeights
+        from memory_dft.core.memory_kernel import CompositeMemoryKernel, KernelWeights
     except ImportError as e:
-        typer.echo(f"❌ Error importing DSE modules: {e}", err=True)
+        typer.echo(f"❌ Error importing memory kernel: {e}", err=True)
         raise typer.Exit(1)
     
     # Define molecules
@@ -1131,12 +1130,6 @@ def thermal(
     typer.echo()
     typer.echo("Running DSE along temperature paths...")
     
-    # Initialize DSE
-    interface = PySCFInterface(basis=basis)
-    kernel = CompositeMemoryKernel(
-        weights=KernelWeights(field=0.3, phys=0.3, chem=0.2, exclusion=0.2)
-    )
-    
     # Temperature paths
     path1_temps = (
         list(np.linspace(t_low, t_high, steps)) + 
@@ -1148,9 +1141,17 @@ def thermal(
     )
     
     def run_dse_thermal_path(temps, path_name):
-        """Run DSE along temperature path."""
-        accumulated_memory = 0.0
+        """Run DSE along temperature path using CompositeMemoryKernel."""
+        # Initialize composite memory kernel (4 physical components!)
+        kernel = CompositeMemoryKernel(
+            weights=KernelWeights(field=0.3, phys=0.25, chem=0.25, exclusion=0.2),
+            gamma_field=1.216,  # From exact diagonalization
+            tau_rep=3.0,
+            tau_recover=10.0,
+        )
+        
         history = []
+        history_times = []
         
         for i, T in enumerate(temps):
             # Effective structure perturbation from thermal expansion
@@ -1158,7 +1159,7 @@ def thermal(
             thermal_expansion = 1.0 + 2e-5 * (T - 300)  # ~2e-5 /K expansion coeff
             r_eff = 0.74 * thermal_expansion  # Å
             
-            # DFT at this snapshot
+            # DFT at this snapshot (PySCF)
             atom_str_t = f'H 0 0 0; H 0 0 {r_eff}'
             mol_t = gto.M(atom=atom_str_t, basis=basis, verbose=0)
             mf_t = dft.RKS(mol_t)
@@ -1167,25 +1168,26 @@ def thermal(
             mf_t = mf_t.smearing_(sigma=sigma_t, method='fermi')
             E_t = mf_t.kernel()
             
-            # Memory contribution (history-dependent)
-            if history:
-                dE = E_t - history[-1]['E']
-                memory_contrib = kernel.compute_total_contribution(
-                    r=r_eff, dr=-0.01 if i > 0 else 0.0,
-                    compression_history=[h['r'] for h in history],
-                    external_field={'E': 0, 'B': 0}
-                )
-                accumulated_memory += abs(dE) * memory_contrib * 0.1
+            # Memory contribution using kernel.integrate()
+            if len(history_times) > 0:
+                weights = kernel.integrate(float(i), np.array(history_times))
+                # Weight past energy differences by kernel
+                dE_history = np.array([abs(h['E'] - E_t) for h in history])
+                memory_contrib = np.sum(weights * dE_history) * 0.1  # Scale factor
+            else:
+                memory_contrib = 0.0
             
-            history.append({'T': T, 'r': r_eff, 'E': E_t})
+            history_times.append(float(i))
+            history.append({'T': T, 'r': r_eff, 'E': E_t, 'mem': memory_contrib})
         
         E_final = history[-1]['E']
-        E_with_memory = E_final + accumulated_memory
+        total_memory = sum(h['mem'] for h in history)
+        E_with_memory = E_final + total_memory
         
         return {
             'E_final': E_final,
             'E_with_memory': E_with_memory,
-            'memory_effect': accumulated_memory,
+            'memory_effect': total_memory,
             'history': history,
         }
     
