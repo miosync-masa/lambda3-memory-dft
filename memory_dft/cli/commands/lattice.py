@@ -119,16 +119,16 @@ class LatticeRunner:
         # Compute observables if ground state found
         if result['psi0'] is not None:
             psi = result['psi0']
-            # Total magnetization
-            Sz_total = sum(self.ops.Sz(i) for i in range(self.n_sites))
+            # Total magnetization (use pre-built S_total_z)
+            Sz_total = self.ops.S_total_z
             mz = float(np.real(psi.conj() @ (Sz_total @ psi)))
             result['magnetization'] = mz
             
             # Nearest-neighbor correlation
-            bonds = self.lattice.get_bonds()
+            bonds = self.lattice.bonds_nn  # 属性アクセス
             if len(bonds) > 0:
                 i, j_site = bonds[0]
-                SiSj = self.ops.Sz(i) @ self.ops.Sz(j_site)
+                SiSj = self.ops.Sz[i] @ self.ops.Sz[j_site]  # リストアクセス
                 corr = float(np.real(psi.conj() @ (SiSj @ psi)))
                 result['nn_correlation'] = corr
         
