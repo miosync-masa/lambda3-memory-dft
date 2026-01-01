@@ -810,19 +810,23 @@ def lattice(
     try:
         import sys
         import os
-        core_path = os.path.join(os.path.dirname(__file__), 'core')
-        if core_path not in sys.path:
-            sys.path.insert(0, core_path)
         
-        from lattice import LatticeGeometry2D
-        from operators import SpinOperators
-        from hamiltonian import HamiltonianBuilder
+        # Add parent directory to enable package imports
+        parent_dir = os.path.dirname(__file__)
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        # Import as package to resolve relative imports
+        from core.lattice import LatticeGeometry2D
+        from core.operators import SpinOperators
+        from core.hamiltonian import HamiltonianBuilder
         
         # Also need eigsh
         from scipy.sparse.linalg import eigsh
         from scipy.linalg import expm
     except ImportError as e:
         typer.echo(f"❌ Error importing lattice modules: {e}", err=True)
+        typer.echo("   Make sure core/lattice.py, core/operators.py, core/hamiltonian.py exist", err=True)
         raise typer.Exit(1)
     
     # Build lattice
@@ -1005,18 +1009,17 @@ def thermal(
     try:
         import sys
         import os
-        physics_path = os.path.join(os.path.dirname(__file__), 'physics')
-        core_path = os.path.join(os.path.dirname(__file__), 'core')
-        if physics_path not in sys.path:
-            sys.path.insert(0, physics_path)
-        if core_path not in sys.path:
-            sys.path.insert(0, core_path)
         
-        from thermodynamics import (
+        # Add parent directory to enable package imports
+        parent_dir = os.path.dirname(__file__)
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from physics.thermodynamics import (
             K_B_EV, T_to_beta, thermal_expectation, 
             boltzmann_weights, compute_entropy
         )
-        from hubbard_engine import HubbardEngine
+        from core.hubbard_engine import HubbardEngine
     except ImportError as e:
         typer.echo(f"❌ Error importing modules: {e}", err=True)
         raise typer.Exit(1)
