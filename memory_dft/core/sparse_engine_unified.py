@@ -1004,7 +1004,7 @@ SparseHamiltonianEngine = SparseEngine
 class SpinOperatorsCompat:
     """Compatibility wrapper for SpinOperators interface."""
     
-    def __init__(self, N_spins: int, use_gpu: bool = False):
+    def __init__(self, N_spins: int, use_gpu: bool = True):
         self._engine = SparseEngine(N_spins, use_gpu=use_gpu, verbose=False)
         self.N = N_spins
         self.Dim = self._engine.dim
@@ -1030,7 +1030,7 @@ class HubbardEngineCompat:
     Now wraps SparseEngine internally.
     """
     
-    def __init__(self, n_sites: int, use_gpu: bool = False, verbose: bool = True):
+    def __init__(self, n_sites: int, use_gpu: bool = True, verbose: bool = True):
         self.n_sites = n_sites
         self.dim = 2 ** n_sites
         self._engine = SparseEngine(n_sites, use_gpu=use_gpu, verbose=verbose)
