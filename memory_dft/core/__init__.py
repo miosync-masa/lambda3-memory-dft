@@ -45,12 +45,61 @@ from .memory_kernel import (
     SimpleMemoryKernel
 )
 
-# Repulsive Kernel
-from .repulsive_kernel import (
-    RepulsiveMemoryKernel,
-    CompressionEvent,
-    ExtendedCompositeKernel
-)
+# Repulsive Kernel (DEPRECATED in v0.5.0 - will be removed)
+# Use ExclusionKernel from memory_kernel.py instead
+HAS_REPULSIVE_KERNEL = False
+
+from dataclasses import dataclass
+
+@dataclass
+class CompressionEvent:
+    """Record of a compression event."""
+    time: float
+    r_min: float
+    pressure: float
+    site: int = 0
+
+
+class RepulsiveMemoryKernel:
+    """
+    DEPRECATED: Use ExclusionKernel from memory_kernel.py instead.
+    
+    This is a minimal placeholder for backward compatibility.
+    """
+    def __init__(self, eta_rep: float = 0.2, tau_rep: float = 3.0,
+                 tau_recover: float = 10.0, r_critical: float = 0.8,
+                 n_power: float = 12.0):
+        self.eta_rep = eta_rep
+        self.tau_rep = tau_rep
+        self.tau_recover = tau_recover
+        self.r_critical = r_critical
+        self.n_power = n_power
+        self.compression_history = []
+        self.state_history = []
+    
+    def add_state(self, t, r, psi=None):
+        self.state_history.append((t, r, psi))
+    
+    def compute_effective_repulsion(self, r, t):
+        return 1.0 / (r ** self.n_power)
+    
+    def compute_repulsion_enhancement(self, t, r):
+        return 0.0
+    
+    def clear(self):
+        self.compression_history = []
+        self.state_history = []
+
+
+class ExtendedCompositeKernel(CompositeMemoryKernel):
+    """
+    DEPRECATED: Use CompositeMemoryKernel directly.
+    """
+    def __init__(self, w_field=0.30, w_phys=0.25, w_chem=0.25, w_rep=0.20):
+        super().__init__(
+            weights=KernelWeights(field=w_field, phys=w_phys, chem=w_chem, exclusion=w_rep),
+            include_exclusion=True
+        )
 
 # History Manager
 from .history_manager import (
