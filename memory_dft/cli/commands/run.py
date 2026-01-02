@@ -48,9 +48,9 @@ def run(
     print_key_value("Memory", "ON" if memory else "OFF")
     typer.echo()
     
-    # Import core modules
+    # Import core modules (v0.5.0: unified imports)
     try:
-        from memory_dft.core.hubbard_engine import HubbardEngine
+        from memory_dft.core import HubbardEngine  # via sparse_engine_unified
         from memory_dft.core.memory_kernel import SimpleMemoryKernel
     except ImportError as e:
         error_exit(
