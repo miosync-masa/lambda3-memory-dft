@@ -44,9 +44,9 @@ class HysteresisRunner:
     """
     
     def __init__(self):
-        # Import repulsive kernel from core
+        # Import repulsive kernel from core (v0.5.0: deprecated, use ExclusionKernel)
         try:
-            from memory_dft.core.repulsive_kernel import RepulsiveMemoryKernel
+            from memory_dft.core import RepulsiveMemoryKernel  # compatibility class
             self.RepulsiveMemoryKernel = RepulsiveMemoryKernel
         except ImportError as e:
             raise ImportError(f"Could not import repulsive kernel: {e}")
