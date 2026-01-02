@@ -127,10 +127,10 @@ HubbardResult = ComputeResult
 SpinOperators = SpinOperatorsCompat
 
 # =============================================================================
-# Lattice Geometry
+# Lattice Geometry (now in sparse_engine_unified)
 # =============================================================================
 
-from .core.lattice import (
+from .core.sparse_engine_unified import (
     LatticeGeometry2D,
     LatticeGeometry,
     create_chain,
