@@ -43,6 +43,13 @@ from ..utils import (
     save_json, error_exit
 )
 
+# Memory quantification
+try:
+    from memory_dft.solvers.memory_indicators import MemoryIndicator, MemoryMetrics
+    HAS_MEMORY_INDICATORS = True
+except ImportError:
+    HAS_MEMORY_INDICATORS = False
+
 
 # =============================================================================
 # Lattice DSE Runner (Using Unified SparseEngine)
@@ -307,6 +314,14 @@ class LatticeDSERunner:
         
         delta_lambda = abs(result1['lambda_final'] - result2['lambda_final'])
         
+        # Compute memory metrics
+        memory_metrics = None
+        if HAS_MEMORY_INDICATORS:
+            memory_metrics = MemoryIndicator.compute_all(
+                O_forward=result1['lambda_final'],
+                O_backward=result2['lambda_final']
+            )
+        
         return {
             'path1': {
                 'label': f'0→{h_final}',
@@ -325,6 +340,7 @@ class LatticeDSERunner:
             'dse': {
                 'delta_lambda': delta_lambda,
             },
+            'memory_metrics': memory_metrics,
             'h_final': h_final,
         }
     
@@ -455,6 +471,14 @@ class LatticeDSERunner:
         
         delta_dse = abs(result1['lambda_final'] - result2['lambda_final'])
         
+        # Compute memory metrics
+        memory_metrics = None
+        if HAS_MEMORY_INDICATORS:
+            memory_metrics = MemoryIndicator.compute_all(
+                O_forward=result1['lambda_final'],
+                O_backward=result2['lambda_final']
+            )
+        
         return {
             'path1': {
                 'label': f'{T_low}K→{T_high}K→{T_final}K',
@@ -472,6 +496,7 @@ class LatticeDSERunner:
             'dse': {
                 'delta_lambda': delta_dse,
             },
+            'memory_metrics': memory_metrics,
             'T_final': T_final,
         }
 
@@ -571,6 +596,14 @@ def lattice(
         typer.echo(f"  DSE Path Difference:")
         typer.echo(f"    |Δλ|: {delta:.4f}")
         
+        # Memory metrics display
+        metrics = results.get('memory_metrics')
+        if metrics is not None:
+            print_section("Memory Indicators", "🧠")
+            typer.echo(f"  ΔO (path non-commutativity): {metrics.delta_O:.6f}")
+            typer.echo(f"  Non-Markovian? {metrics.is_non_markovian()}")
+            typer.echo("")
+        
         if delta > 0.01:
             typer.echo("\n  ✨ Path dependence detected!")
             typer.echo("  → Same final H, DIFFERENT quantum states")
@@ -601,6 +634,14 @@ def lattice(
         delta = results['dse']['delta_lambda']
         typer.echo(f"  DSE Path Difference:")
         typer.echo(f"    |Δλ|: {delta:.4f}")
+        
+        # Memory metrics display
+        metrics = results.get('memory_metrics')
+        if metrics is not None:
+            print_section("Memory Indicators", "🧠")
+            typer.echo(f"  ΔO (path non-commutativity): {metrics.delta_O:.6f}")
+            typer.echo(f"  Non-Markovian? {metrics.is_non_markovian()}")
+            typer.echo("")
         
         if delta > 0.01:
             typer.echo("\n  ✨ Thermal path dependence detected!")
