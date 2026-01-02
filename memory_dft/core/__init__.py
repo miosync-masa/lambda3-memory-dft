@@ -149,8 +149,8 @@ from .sparse_engine_unified import (
 # For code that imports SpinOperators
 SpinOperators = SpinOperatorsCompat
 
-# For code that imports HubbardEngine
-HubbardEngine = SparseEngine
+# HubbardEngine is already imported as HubbardEngineCompat from sparse_engine_unified
+# (Do NOT override here!)
 
 # For code that imports HamiltonianBuilder
 # Usage: HamiltonianBuilder(lattice, ops) → engine.build_heisenberg(bonds)
