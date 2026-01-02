@@ -90,9 +90,19 @@ class PathComparisonRunner:
             result = self.engine.compute_full(t=1.0, U=2.0)
             psi = result.psi
             lambda_std = result.lambda_val
+            # Ensure CPU float (handle CuPy arrays)
+            if hasattr(lambda_std, 'get'):
+                lambda_std = float(lambda_std.get())
+            else:
+                lambda_std = float(lambda_std)
             lambdas_std.append(lambda_std)
             
             delta_mem = memory.compute_memory_contribution(t, psi)
+            # Ensure CPU float (handle CuPy arrays)
+            if hasattr(delta_mem, 'get'):
+                delta_mem = float(delta_mem.get())
+            else:
+                delta_mem = float(delta_mem)
             lambdas_mem.append(lambda_std + delta_mem)
             memory.add_state(t, lambda_std, psi)
         
