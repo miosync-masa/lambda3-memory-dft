@@ -49,67 +49,52 @@ No density-functional approximation. No history erasure. The full many-body wave
 
 ---
 
-## Key Insight: Direction Matters (v0.4.0)
-
-**The same distance r = 0.8 Å has DIFFERENT meaning:**
-
-```
-         r = 0.8 Å
-              │
-    ┌─────────┴─────────┐
-    │                   │
-Approaching         Departing
-(compressing)       (expanding)
-    │                   │
-    ▼                   ▼
-DFT: Same V(r)      DFT: Same V(r)     ← WRONG!
-DSE: Low memory     DSE: High memory   ← CORRECT!
-```
-
-DFT sees only `r = 0.8 Å` (same).  
-DSE sees the **direction of change** (different).
-
-This is why we added the **Exclusion Kernel** in v0.4.0.
-
----
-
-## Architecture
+## Architecture (v0.5.0)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     Direct Schrödinger Evolution                    │
-│                           memory-dft v0.4.0                         │
+│                           memory-dft v0.5.0                         │
 │         ~ First-Principles History-Dependent Dynamics ~             │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│  CORE: Foundation                                                    │
+│  CORE: Foundation (Unified in v0.5.0)                               │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  CompositeMemoryKernel (4 Components)                        │   │
+│  │  CompositeMemoryKernel (4 Components)    [memory_kernel.py]  │   │
 │  │                                                              │   │
 │  │  K(t-τ) = w₁·K_field + w₂·K_phys + w₃·K_chem + w₄·K_excl   │   │
 │  │                                                              │   │
 │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐           │   │
-│  │  │PowerLaw │ │Stretched│ │  Step   │ │Exclusion│ ← NEW!    │   │
+│  │  │PowerLaw │ │Stretched│ │  Step   │ │Exclusion│           │   │
 │  │  │ (Field) │ │  Exp    │ │ (Chem)  │ │(Direction)          │   │
 │  │  │ 1/t^γ   │ │e^(-t^β) │ │sigmoid  │ │e^-t(1-e^-t)         │   │
 │  │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘           │   │
-│  │       │           │           │           │                 │   │
 │  │       └───────────┴─────┬─────┴───────────┘                 │   │
-│  │                         │                                    │   │
 │  │                         ▼                                    │   │
-│  │              ┌──────────────────────┐                       │   │
-│  │              │   HistoryManager     │                       │   │
-│  │              │  ψ(τ), Λ(τ), t       │                       │   │
-│  │              └──────────────────────┘                       │   │
+│  │       ┌──────────────────────────────────────┐              │   │
+│  │       │   HistoryManager [history_manager.py] │              │   │
+│  │       │   ψ(τ), Λ(τ), observables, metadata   │              │   │
+│  │       └──────────────────────────────────────┘              │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                      │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │
-│  │ HubbardEngine│  │SparseEngine │  │  Lattice    │                 │
-│  │  (Chemistry) │  │  (General)  │  │  Geometry   │                 │
-│  └─────────────┘  └─────────────┘  └─────────────┘                 │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  SparseEngine (UNIFIED)            [sparse_engine_unified.py] │   │
+│  │                                                               │   │
+│  │  ┌─────────────────────────────────────────────────────────┐ │   │
+│  │  │ Models:  Heisenberg │ Ising │ XY │ Hubbard │ Kitaev    │ │   │
+│  │  ├─────────────────────────────────────────────────────────┤ │   │
+│  │  │ Geometry: Chain │ Ladder │ Square │ Custom bonds        │ │   │
+│  │  ├─────────────────────────────────────────────────────────┤ │   │
+│  │  │ Backend:  CPU (NumPy/SciPy) │ GPU (CuPy) auto-switch    │ │   │
+│  │  ├─────────────────────────────────────────────────────────┤ │   │
+│  │  │ Output:   λ = K/|V| │ 2-RDM │ Correlations │ Energies   │ │   │
+│  │  └─────────────────────────────────────────────────────────┘ │   │
+│  │                                                               │   │
+│  │  Backward Compatible: HubbardEngine, SpinOperators, etc.     │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
@@ -118,20 +103,25 @@ This is why we added the **Exclusion Kernel** in v0.4.0.
 │  SOLVERS: Time Evolution                                             │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  ┌─────────────────┐     ┌─────────────────┐                       │
-│  │MemoryLanczos    │     │TimeEvolution    │  ← High-level API     │
-│  │  Solver         │────▶│  Engine         │                       │
-│  │                 │     │                 │                       │
-│  │ ψ(t+dt) =       │     │ config:         │                       │
-│  │ exp(-iHdt)ψ(t)  │     │  use_memory     │                       │
-│  │ + η·ψ_memory    │     │  adaptive       │                       │
-│  └─────────────────┘     └─────────────────┘                       │
-│          │                                                          │
-│          ▼                                                          │
-│  ┌─────────────────┐     ┌─────────────────┐                       │
-│  │MemoryIndicator  │     │ChemicalReaction │                       │
-│  │  ΔO, M(t), γ    │     │  Solver         │                       │
-│  └─────────────────┘     └─────────────────┘                       │
+│  ┌─────────────────────┐       ┌─────────────────────┐             │
+│  │ MemoryLanczosSolver │       │ TimeEvolutionEngine │             │
+│  │ [lanczos_memory.py] │──────▶│ [time_evolution.py] │             │
+│  │                     │       │                     │             │
+│  │ ψ(t+dt) =           │       │ High-level API:     │             │
+│  │ exp(-iHdt)ψ(t)      │       │ • EvolutionConfig   │             │
+│  │ + η·ψ_memory        │       │ • quick_evolve()    │             │
+│  └─────────────────────┘       └─────────────────────┘             │
+│            │                                                        │
+│            ▼                                                        │
+│  ┌─────────────────────┐       ┌─────────────────────┐             │
+│  │ MemoryIndicator     │       │ChemicalReactionSolver│             │
+│  │[memory_indicators.py]│       │[chemical_reaction.py]│             │
+│  │                     │       │                     │             │
+│  │ • ΔO (path diff)    │       │ • ReactionPath      │             │
+│  │ • M(t) (temporal)   │       │ • compare_paths()   │             │
+│  │ • γ_memory          │       │ • Surface chemistry │             │
+│  │ • HysteresisAnalyzer│       │                     │             │
+│  └─────────────────────┘       └─────────────────────┘             │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
@@ -140,21 +130,84 @@ This is why we added the **Exclusion Kernel** in v0.4.0.
 │  PHYSICS: Analysis                                                   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐    │
-│  │  Vorticity      │  │   2-RDM         │  │ Thermodynamics  │    │
-│  │  Calculator     │  │  Analysis       │  │                 │    │
-│  │                 │  │                 │  │  T ↔ β          │    │
-│  │  γ_total        │  │ compute_2rdm()  │  │  S(T)           │    │
-│  │  γ_local        │  │ filter_by_dist()│  │  ⟨O⟩_T          │    │
-│  │  γ_memory       │  │                 │  │                 │    │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘    │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐     │
+│  │ Lambda3Bridge   │  │   Vorticity     │  │ Thermodynamics  │     │
+│  │[lambda3_bridge] │  │  [vorticity.py] │  │[thermodynamics] │     │
+│  │                 │  │                 │  │                 │     │
+│  │ • λ = K/|V|     │  │ • γ_total       │  │ • T ↔ β         │     │
+│  │ • StabilityPhase│  │ • γ_local       │  │ • ⟨O⟩_T         │     │
+│  │ • HCSPValidator │  │ • γ_memory      │  │ • S(T), F(T)    │     │
+│  │ • EDR (env)     │  │ • GammaExtractor│  │ • C_v(T)        │     │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘     │
+│                                                                      │
+│  ┌─────────────────┐                                                │
+│  │   2-RDM         │  Interfaces:  pyscf_interface.py (DFT vs DSE) │
+│  │   [rdm.py]      │  Visualization: prl_figures.py (PRL plots)    │
+│  │                 │  CLI: memory-dft lattice/thermal/gamma        │
+│  │ • compute_2rdm  │                                                │
+│  │ • correlations  │                                                │
+│  │ • PySCF convert │                                                │
+│  └─────────────────┘                                                │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 4-Component Memory Kernel (v0.4.0)
+## v0.5.0 Changes: Unified SparseEngine
+
+### Before (v0.4.x): 6 separate files
+```
+core/
+├── operators.py       # Spin operators
+├── hamiltonian.py     # Hamiltonian builders
+├── hubbard_engine.py  # Hubbard-specific
+├── sparse_engine.py   # General sparse
+├── lattice.py         # Geometry
+└── repulsive_kernel.py # Deprecated
+```
+
+### After (v0.5.0): 1 unified file
+```
+core/
+├── memory_kernel.py         # 4-component kernel
+├── history_manager.py       # State history
+└── sparse_engine_unified.py # ALL MODELS IN ONE!
+    ├── SparseEngine          # Main class
+    ├── build_heisenberg()    # Models
+    ├── build_ising()
+    ├── build_xy()
+    ├── build_hubbard()
+    ├── build_kitaev()
+    ├── create_chain()        # Geometry
+    ├── create_ladder()
+    ├── create_square_lattice()
+    ├── compute_lambda()      # Physics
+    ├── compute_2rdm()
+    └── HubbardEngineCompat   # Backward compat
+```
+
+### Backward Compatibility: 100%
+
+All old imports still work:
+
+```python
+# Old code (v0.4.x) - STILL WORKS!
+from memory_dft import HubbardEngine, SpinOperators
+from memory_dft import LatticeGeometry2D, create_chain
+
+# New code (v0.5.0) - Recommended
+from memory_dft import SparseEngine
+
+engine = SparseEngine(n_sites=6, use_gpu=True)
+geom = engine.build_ladder(Lx=3, Ly=2)
+H_K, H_V = engine.build_heisenberg(geom.bonds)
+result = engine.compute_full(t=1.0, U=2.0)
+```
+
+---
+
+## 4-Component Memory Kernel
 
 The memory kernel decomposes history effects into four physical channels:
 
@@ -163,31 +216,21 @@ The memory kernel decomposes history effects into four physical channels:
 | **Field** | PowerLaw: `1/(t-τ)^γ` | Long-range correlations | EM fields, collective modes |
 | **Phys** | StretchedExp: `e^(-(t/τ₀)^β)` | Structural relaxation | Viscoelastic response |
 | **Chem** | Step: `sigmoid(t-t_react)` | Irreversible reactions | Oxidation, bond formation |
-| **Exclusion** | `e^(-t/τ_rep)(1-e^(-t/τ_rec))` | Distance direction | **Compression history** |
-
-### Why Exclusion Kernel?
+| **Exclusion** | `e^(-t/τ_rep)(1-e^(-t/τ_rec))` | Distance direction | Compression history |
 
 ```python
-# Same distance, different meaning!
-r = 0.8  # Angstrom
+from memory_dft import CompositeMemoryKernel, KernelWeights
 
-# Case 1: Approaching (compressing)
-# → System hasn't been compressed yet
-# → Low exclusion memory
-
-# Case 2: Departing (expanding)  
-# → System was just compressed
-# → HIGH exclusion memory (Pauli repulsion enhanced)
-
-# DFT: V(r) = V(0.8)  # Same!
-# DSE: V_eff = V(r) × [1 + enhancement(history)]  # Different!
+kernel = CompositeMemoryKernel(
+    weights=KernelWeights(
+        field=0.30,      # Long-range correlations
+        phys=0.25,       # Structural relaxation
+        chem=0.25,       # Chemical irreversibility
+        exclusion=0.20   # Direction-dependent
+    ),
+    include_exclusion=True
+)
 ```
-
-This explains:
-- AFM approach/retract hysteresis
-- Diamond anvil compression irreversibility
-- White layer formation in machining
-- Elastic memory in materials
 
 ---
 
@@ -242,39 +285,22 @@ sys.path.insert(0, '/content/lambda3-memory-dft')
 
 ## Quick Start
 
-### Basic DSE with 4-Component Kernel
+### Basic DSE with Unified Engine (v0.5.0)
 
 ```python
-from memory_dft import (
-    CompositeMemoryKernel,
-    KernelWeights,
-    HistoryManager,
-    MemoryLanczosSolver
-)
+from memory_dft import SparseEngine, CompositeMemoryKernel, HistoryManager
 
-# Create 4-component kernel
-kernel = CompositeMemoryKernel(
-    weights=KernelWeights(
-        field=0.30,      # Long-range correlations
-        phys=0.25,       # Structural relaxation
-        chem=0.25,       # Chemical irreversibility
-        exclusion=0.20   # Distance direction (NEW!)
-    ),
-    include_exclusion=True
-)
+# Create unified engine (GPU auto-detection)
+engine = SparseEngine(n_sites=6, use_gpu=True, verbose=True)
 
-# History manager tracks ψ(τ), Λ(τ)
-history = HistoryManager(max_history=1000)
+# Build geometry and Hamiltonian
+geom = engine.build_chain(L=6)
+H_K, H_V = engine.build_heisenberg(geom.bonds, J=1.0)
 
-# Solver with memory
-solver = MemoryLanczosSolver(
-    memory_kernel=kernel,
-    history_manager=history,
-    memory_strength=0.1
-)
-
-# Time evolution with memory
-psi = solver.evolve(H, psi0, t=0.0, dt=0.1)
+# Compute λ = K/|V| for ground state
+result = engine.compute_full(t=1.0, U=2.0)
+print(f"λ = {result.Lambda:.4f}")
+print(f"Phase: {result.phase}")
 ```
 
 ### Path Comparison
@@ -301,66 +327,36 @@ comparison = solver.compare_paths(result1, result2)
 print(f"ΔΛ = {comparison['delta_lambda']:.3f}")  # → 1.594 (DFT: 0)
 ```
 
-### Compression Hysteresis (Exclusion Kernel)
-
-```python
-from memory_dft import RepulsiveMemoryKernel
-import numpy as np
-
-kernel = RepulsiveMemoryKernel(
-    eta_rep=0.3,
-    tau_rep=3.0,
-    tau_recover=10.0
-)
-
-# Compression phase
-for t in np.arange(0, 2, 0.1):
-    r = 1.0 - 0.2 * t  # Approaching
-    kernel.add_state(t, r)
-    V_compress = kernel.compute_effective_repulsion(r, t)
-
-# Expansion phase  
-for t in np.arange(2, 5, 0.1):
-    r = 0.6 + 0.1 * (t - 2)  # Departing
-    V_expand = kernel.compute_effective_repulsion(r, t)
-    # V_expand > V_compress at same r!
-    # → Hysteresis from compression memory
-```
-
 ---
 
-## Project Structure
+## Project Structure (v0.5.0)
 
 ```
 memory_dft/
-├── core/
-│   ├── memory_kernel.py      # 4-component kernel (field/phys/chem/exclusion)
-│   ├── repulsive_kernel.py   # Detailed compression tracking
-│   ├── history_manager.py    # ψ(τ), Λ(τ) history
-│   ├── hubbard_engine.py     # Chemistry-specialized Hubbard
-│   ├── sparse_engine.py      # General sparse Hamiltonian
-│   ├── lattice.py            # 2D lattice geometry
-│   ├── operators.py          # Spin operators
-│   └── hamiltonian.py        # Hamiltonian builders
-├── solvers/
-│   ├── lanczos_memory.py     # Lanczos + memory term
-│   ├── time_evolution.py     # High-level evolution API
-│   ├── memory_indicators.py  # ΔO, M(t), γ quantification
-│   └── chemical_reaction.py  # Surface chemistry solver
-├── physics/
-│   ├── vorticity.py          # γ decomposition from 2-RDM
-│   ├── rdm.py                # 2-RDM computation
-│   ├── thermodynamics.py     # Finite-temperature utilities
-│   └── lambda3_bridge.py     # Stability diagnostics
+├── core/                          # Foundation (UNIFIED!)
+│   ├── memory_kernel.py           # 4-component kernel
+│   ├── history_manager.py         # ψ(τ), Λ(τ) history
+│   └── sparse_engine_unified.py   # ALL models + geometry + GPU
+├── solvers/                       # Time Evolution
+│   ├── lanczos_memory.py          # Lanczos + memory term
+│   ├── time_evolution.py          # High-level API
+│   ├── memory_indicators.py       # ΔO, M(t), γ quantification
+│   └── chemical_reaction.py       # Surface chemistry
+├── physics/                       # Analysis
+│   ├── lambda3_bridge.py          # Stability diagnostics (λ, EDR)
+│   ├── vorticity.py               # γ decomposition from 2-RDM
+│   ├── thermodynamics.py          # Finite-T utilities
+│   └── rdm.py                     # 2-RDM computation
+├── interfaces/
+│   └── pyscf_interface.py         # DFT vs DSE comparison
 ├── visualization/
-│   └── prl_figures.py        # Publication-quality figures
-├── examples/
-│   ├── thermal_path.py       # Thermal path dependence demo
-│   └── ladder_2d.py          # 2D ladder DSE demo
+│   └── prl_figures.py             # Publication figures
+├── cli/                           # Command-line interface
+│   └── commands/                  # lattice, thermal, gamma
 └── tests/
-    ├── test_chemical.py      # Chemical tests (A/B/C/D)
-    ├── test_repulsive.py     # Repulsive tests (E1/E2/E3)
-    └── test_gamma_*.py       # γ decomposition tests
+    ├── test_chemical.py           # A/B/C/D tests
+    ├── test_repulsive.py          # E1/E2/E3 tests
+    └── test_h2_memory.py          # H2 molecule tests
 ```
 
 ---
@@ -384,16 +380,9 @@ memory_dft/
 | **E2** | Path-dependent V | \|Δ∫V dt\| = 7912 |
 | **E3** | Quantum memory | 10⁹× amplification |
 
-### γ Decomposition
-
-| Test | Description | Result |
-|------|-------------|--------|
-| **Test 6** | Hubbard ED (L=6-10) | γ_memory = 1.216 |
-| **Distance Scan** | ED (L=6-12) | γ_memory = 0.916 |
-
 Run all tests:
 ```bash
-python -m pytest tests/ -v
+cd memory_dft && python -m pytest tests/ -v
 ```
 
 ---
@@ -411,34 +400,6 @@ python -m pytest tests/ -v
 
 ---
 
-## Theoretical Foundation
-
-### Why DFT Fails
-
-The Hohenberg-Kohn theorem states $E = E[\rho]$. This is exact for ground states, but:
-
-1. **History is erased** — two paths to same ρ give same E
-2. **Non-local correlations discarded** — 46.7% of physics lost
-3. **Direction ignored** — approaching vs departing indistinguishable
-
-### Why DSE Works
-
-The time-dependent Schrödinger equation is the **exact governing law**:
-
-1. **Full wave function retained** — $|\psi(t)\rangle$ carries history
-2. **Non-local correlations included** — all 2-RDM structure preserved
-3. **Direction tracked** — exclusion kernel sees compression history
-
-### The γ Decomposition
-
-Following Lie & Fullwood [PRL 135, 230204 (2025)]:
-
-$$\gamma_{\text{memory}} = \gamma_{\text{total}} - \gamma_{\text{local}}$$
-
-Result: γ_memory = 1.216 (46.7%) shows that realistic systems **violate the Markovian assumptions** required for density-only descriptions.
-
----
-
 ## Authors
 
 - **Masamichi Iizumi** (飯泉真道) — CEO, Miosync Inc.
@@ -453,9 +414,9 @@ Result: γ_memory = 1.216 (46.7%) shows that realistic systems **violate the Mar
   author       = {Iizumi, Masamichi and Iizumi, Tamaki},
   title        = {{Direct Schrödinger Evolution: First-Principles
                    History-Dependent Quantum Dynamics}},
-  year         = {2024},
+  year         = {2025},
   publisher    = {Zenodo},
-  version      = {0.4.0},
+  version      = {0.5.0},
   doi          = {10.5281/zenodo.18095869},
   url          = {https://doi.org/10.5281/zenodo.18095869}
 }
@@ -472,8 +433,6 @@ MIT License
 ## Acknowledgments
 
 We thank Lie & Fullwood for establishing the theoretical framework that motivated this work [PRL 135, 230204 (2025)].
-
-The insight that "the same distance has different meaning depending on direction" emerged from analyzing elastic hysteresis in everyday materials.
 
 ---
 
