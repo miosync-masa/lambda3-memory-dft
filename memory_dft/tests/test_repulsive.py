@@ -34,8 +34,6 @@ import time
 # v0.5.0: Package-based imports
 from memory_dft.core import (
     RepulsiveMemoryKernel,
-    CompressionEvent,
-    ExtendedCompositeKernel,
     HubbardEngine,
 )
 
