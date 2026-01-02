@@ -714,23 +714,21 @@ class SparseEngine:
         Returns:
             rdm2: Array of shape (n_sites, n_sites, n_sites, n_sites)
         """
-        try:
-            from memory_dft.physics.rdm import compute_2rdm
-            number_ops = self._get_number_operators()
-            
-            # Convert to numpy if on GPU
-            if self.use_gpu:
-                psi_np = psi.get() if hasattr(psi, 'get') else psi
-                number_ops_np = [op.get() if hasattr(op, 'get') else op 
-                                 for op in number_ops]
-            else:
-                psi_np = psi
-                number_ops_np = number_ops
-            
-            return compute_2rdm(psi_np, self.n_sites, 
-                               number_ops=number_ops_np, method=method)
-        except ImportError:
-            raise ImportError("physics.rdm module not found")
+        from memory_dft.physics.rdm import compute_2rdm
+        
+        number_ops = self._get_number_operators()
+        
+        # Convert to numpy if on GPU
+        if self.use_gpu:
+            psi_np = psi.get() if hasattr(psi, 'get') else psi
+            number_ops_np = [op.get() if hasattr(op, 'get') else op 
+                             for op in number_ops]
+        else:
+            psi_np = psi
+            number_ops_np = number_ops
+        
+        return compute_2rdm(psi_np, self.n_sites, 
+                           number_ops=number_ops_np, method=method)
     
     # =========================================================================
     # Convenience Methods
