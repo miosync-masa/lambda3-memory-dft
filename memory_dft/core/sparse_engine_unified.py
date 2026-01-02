@@ -817,6 +817,80 @@ class SpinOperatorsCompat:
         self.S_total_z = self._engine.S_total_z
 
 
+class HubbardEngineCompat:
+    """
+    Backward compatibility wrapper for HubbardEngine API.
+    
+    Original API:
+        engine = HubbardEngine(L)
+        result = engine.compute_full(t=1.0, U=2.0, h=0.0, 
+                                     bond_lengths=..., site_potentials=...)
+    
+    Now wraps SparseEngine internally.
+    """
+    
+    def __init__(self, n_sites: int, use_gpu: bool = False, verbose: bool = True):
+        self.n_sites = n_sites
+        self.dim = 2 ** n_sites
+        self._engine = SparseEngine(n_sites, use_gpu=use_gpu, verbose=verbose)
+        self._geometry = self._engine.build_chain(periodic=False)
+    
+    def compute_full(self, t: float = 1.0, U: float = 2.0, h: float = 0.0,
+                     site_potentials: Optional[List[float]] = None,
+                     bond_lengths: Optional[List[float]] = None,
+                     compute_rdm2: bool = False) -> ComputeResult:
+        """
+        Compute ground state and stability parameter.
+        
+        Args:
+            t: Hopping parameter
+            U: On-site interaction
+            h: Magnetic field
+            site_potentials: Site-dependent potentials
+            bond_lengths: Bond-length dependent hopping
+            compute_rdm2: Compute 2-RDM
+            
+        Returns:
+            ComputeResult with energy, psi, lambda_val, etc.
+        """
+        bonds = self._geometry.bonds
+        
+        H_K, H_V = self._engine.build_hubbard(
+            bonds, t=t, U=U, h=h,
+            site_potentials=site_potentials,
+            bond_lengths=bond_lengths
+        )
+        
+        return self._engine.compute_full(H_K, H_V, compute_rdm2=compute_rdm2)
+    
+    def compute_ground_state(self, t: float = 1.0, U: float = 2.0, h: float = 0.0):
+        """Compute ground state only."""
+        result = self.compute_full(t=t, U=U, h=h)
+        return result.energy, result.psi
+    
+    @property
+    def H(self):
+        """Current Hamiltonian (for compatibility)."""
+        H_K, H_V = self._engine.build_hubbard(self._geometry.bonds)
+        return H_K + H_V
+    
+    @property
+    def H_K(self):
+        """Kinetic Hamiltonian."""
+        H_K, _ = self._engine.build_hubbard(self._geometry.bonds)
+        return H_K
+    
+    @property
+    def H_V(self):
+        """Potential Hamiltonian."""
+        _, H_V = self._engine.build_hubbard(self._geometry.bonds)
+        return H_V
+
+
+# Alias for backward compatibility
+HubbardEngine = HubbardEngineCompat
+
+
 # =============================================================================
 # Test
 # =============================================================================
