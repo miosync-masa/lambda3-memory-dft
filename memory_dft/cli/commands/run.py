@@ -80,10 +80,17 @@ def run(
             
             result = engine.compute_full(t=t_hop, U=U, h=h)
             psi = result.psi
-            lambda_val = result.lambda_val
+            lambda_val = float(result.lambda_val)  # Ensure float
             
             if memory:
                 delta_mem = mem_kernel.compute_memory_contribution(t_current, psi)
+                # Convert to float if CuPy array
+                if hasattr(delta_mem, 'get'):
+                    delta_mem = float(delta_mem.get())
+                elif hasattr(delta_mem, 'item'):
+                    delta_mem = float(delta_mem.item())
+                else:
+                    delta_mem = float(delta_mem)
                 lambda_val += delta_mem
                 mem_kernel.add_state(t_current, result.lambda_val, psi)
             
