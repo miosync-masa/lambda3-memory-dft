@@ -41,10 +41,8 @@ Structure (Refactored):
   │   └── commands/             # Individual command modules
   ├── core/
   │   ├── memory_kernel.py      # 4-layer kernel (field/phys/chem/exclusion)
-  │   ├── repulsive_kernel.py   # Compression memory
   │   ├── history_manager.py    # History tracking
-  │   ├── sparse_engine_unified.py  # Unified sparse engine (v0.5.0)
-  │   └── lattice.py            # Lattice geometry
+  │   └── parse_engine_unified.py  # Unified sparse engine (v0.5.0)
   ├── solvers/
   │   ├── lanczos_memory.py     # Lanczos + memory
   │   ├── time_evolution.py     # Time evolution
@@ -60,6 +58,33 @@ Structure (Refactored):
   └── visualization/
       └── prl_figures.py        # PRL publication figures
 
+__version__ = "0.5.0"
+
+Foundation modules for Memory-DFT simulations.
+
+Memory Kernel Components (v0.4.0):
+  1. Field (PowerLaw): Long-range correlations
+  2. Phys (StretchedExp): Structural relaxation  
+  3. Chem (Step): Irreversible reactions
+  4. Exclusion: Distance-direction memory
+
+The same distance r = 0.8 A means DIFFERENT things:
+  - Approaching: system is being compressed
+  - Departing: system is recovering
+DFT cannot distinguish. DSE can!
+
+Modules:
+  - memory_kernel: Non-Markovian memory kernels (4 components)
+  - repulsive_kernel: Detailed compression history tracking
+  - history_manager: State history tracking
+  - sparse_engine_unified: Unified sparse Hamiltonian engine (GPU/CPU)
+  - lattice: Lattice geometry definitions
+
+v0.5.0: Unified SparseEngine consolidation
+  - operators.py, hamiltonian.py, hubbard_engine.py → sparse_engine_unified.py
+  - All models (Heisenberg, Ising, XY, Hubbard, Kitaev) in one place
+  - GPU/CPU automatic backend selection
+
 Reference:
   Lie & Fullwood, PRL 135, 230204 (2025)
 
@@ -68,14 +93,8 @@ DOI: 10.5281/zenodo.18095869
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
-__version__ = "0.5.0"
-
-# =============================================================================
-# Core Components
-# =============================================================================
-
-# Memory Kernels
-from .core.memory_kernel import (
+# Memory Kernels (4 components: field, phys, chem, exclusion)
+from .memory_kernel import (
     MemoryKernelBase,
     PowerLawKernel,
     StretchedExpKernel,
@@ -86,53 +105,44 @@ from .core.memory_kernel import (
     KernelWeights,
     CatalystMemoryKernel,
     CatalystEvent,
-    SimpleMemoryKernel
-)
-
-# Repulsive Kernel (DEPRECATED in v0.5.0 - use ExclusionKernel instead)
-# Import from core where dummy classes are defined
-from .core import (
-    RepulsiveMemoryKernel,
-    CompressionEvent,
-    ExtendedCompositeKernel,
-    HAS_REPULSIVE_KERNEL,
+    SimpleMemoryKernel,
+    RepulsiveMemoryKernel  # v0.5.0: moved to memory_kernel.py
 )
 
 # History Manager
-from .core.history_manager import (
+from .history_manager import (
     HistoryManager,
     HistoryManagerGPU,
     LambdaDensityCalculator,
     StateSnapshot
 )
 
-# =============================================================================
+# =========================================================================
 # Unified Sparse Engine (v0.5.0)
-# Replaces: sparse_engine.py, hubbard_engine.py, operators.py, hamiltonian.py
-# =============================================================================
+# Replaces: operators.py, hamiltonian.py, hubbard_engine.py, sparse_engine.py
+# =========================================================================
 
-from .core.sparse_engine_unified import (
-    # Main class
+from .sparse_engine_unified import (
+    # Core class
     SparseEngine,
+    
     # Data classes
     SystemGeometry,
     ComputeResult,
+    
     # Backward compatibility aliases
-    SparseHamiltonianEngine,
-    SpinOperatorsCompat,
-    HubbardEngineCompat,
+    SparseHamiltonianEngine,  # = SparseEngine
+    HubbardResult,            # = ComputeResult
+    SpinOperatorsCompat,      # SpinOperators-like interface
+    HubbardEngineCompat,      # HubbardEngine-like interface
+    HubbardEngine,            # = HubbardEngineCompat
 )
 
-# Backward compatibility aliases
-HubbardEngine = HubbardEngineCompat
-HubbardResult = ComputeResult
-SpinOperators = SpinOperatorsCompat
-
-# =============================================================================
+# =========================================================================
 # Lattice Geometry (now in sparse_engine_unified)
-# =============================================================================
+# =========================================================================
 
-from .core.sparse_engine_unified import (
+from .sparse_engine_unified import (
     LatticeGeometry2D,
     LatticeGeometry,
     create_chain,
@@ -140,45 +150,18 @@ from .core.sparse_engine_unified import (
     create_square_lattice,
 )
 
-# =============================================================================
-# Backward Compatibility - Operators & Hamiltonian
-# =============================================================================
+# =========================================================================
+# Backward Compatibility Aliases
+# =========================================================================
 
-def pauli_matrices():
-    """Return Pauli matrices (σx, σy, σz)."""
-    import numpy as np
-    sx = np.array([[0, 0.5], [0.5, 0]], dtype=np.complex128)
-    sy = np.array([[0, -0.5j], [0.5j, 0]], dtype=np.complex128)
-    sz = np.array([[0.5, 0], [0, -0.5]], dtype=np.complex128)
-    return sx, sy, sz
+# For code that imports SpinOperators
+SpinOperators = SpinOperatorsCompat
 
+# HubbardEngine is already imported as HubbardEngineCompat from sparse_engine_unified
+# (Do NOT override here!)
 
-def create_spin_operators(n_sites, use_gpu=False):
-    """Create spin operators for n_sites."""
-    return SpinOperatorsCompat(n_sites, use_gpu=use_gpu)
-
-
-def compute_total_spin(psi, ops):
-    """Compute total spin ⟨S²⟩."""
-    if hasattr(ops, '_engine'):
-        return ops._engine.compute_total_spin(psi)
-    raise ValueError("ops must be SpinOperatorsCompat")
-
-
-def compute_magnetization(psi, ops):
-    """Compute magnetization ⟨Sz⟩/N."""
-    if hasattr(ops, '_engine'):
-        return ops._engine.compute_magnetization(psi)
-    raise ValueError("ops must be SpinOperatorsCompat")
-
-
-def compute_correlation(psi, ops, i, j, component='Z'):
-    """Compute spin-spin correlation ⟨Si·Sj⟩."""
-    if hasattr(ops, '_engine'):
-        return ops._engine.compute_correlation(psi, i, j, component)
-    raise ValueError("ops must be SpinOperatorsCompat")
-
-
+# For code that imports HamiltonianBuilder
+# Usage: HamiltonianBuilder(lattice, ops) → engine.build_heisenberg(bonds)
 class HamiltonianBuilder:
     """
     Backward compatibility wrapper for HamiltonianBuilder.
@@ -205,6 +188,31 @@ class HamiltonianBuilder:
         return self._engine.build_kitaev_rect(Kx=Kx, Ky=Ky, Kz_diag=Kz_diag)
 
 
+# Helper functions (backward compatibility)
+def pauli_matrices():
+    """Return Pauli matrices (σx, σy, σz)."""
+    import numpy as np
+    sx = np.array([[0, 0.5], [0.5, 0]], dtype=np.complex128)
+    sy = np.array([[0, -0.5j], [0.5j, 0]], dtype=np.complex128)
+    sz = np.array([[0.5, 0], [0, -0.5]], dtype=np.complex128)
+    return sx, sy, sz
+
+
+def pauli_matrices_full():
+    """Return full Pauli matrices (I, σx, σy, σz, σ+, σ-)."""
+    import numpy as np
+    I = np.eye(2, dtype=np.complex128)
+    sx, sy, sz = pauli_matrices()
+    sp = np.array([[0, 1], [0, 0]], dtype=np.complex128)
+    sm = np.array([[0, 0], [1, 0]], dtype=np.complex128)
+    return I, sx, sy, sz, sp, sm
+
+
+def create_spin_operators(n_sites, use_gpu=False):
+    """Create spin operators for n_sites."""
+    return SpinOperatorsCompat(n_sites, use_gpu=use_gpu)
+
+
 def build_hamiltonian(model, lattice, ops, **kwargs):
     """Build Hamiltonian for given model."""
     builder = HamiltonianBuilder(lattice, ops)
@@ -220,174 +228,33 @@ def build_hamiltonian(model, lattice, ops, **kwargs):
         raise ValueError(f"Unknown model: {model}")
 
 
-# =============================================================================
-# Solvers
-# =============================================================================
-
-from .solvers.lanczos_memory import (
-    MemoryLanczosSolver,
-    AdaptiveMemorySolver,
-    lanczos_expm_multiply
-)
-
-from .solvers.time_evolution import (
-    TimeEvolutionEngine,
-    EvolutionConfig,
-    EvolutionResult,
-    quick_evolve
-)
-
-from .solvers.memory_indicators import (
-    MemoryIndicator,
-    MemoryMetrics,
-    HysteresisAnalyzer
-)
-
-from .solvers.chemical_reaction import (
-    ChemicalReactionSolver,
-    SurfaceHamiltonianEngine,
-    LanczosEvolver,
-    ReactionEvent,
-    ReactionPath,
-    PathResult
-)
-
-# =============================================================================
-# Physics
-# =============================================================================
-
-from .physics.lambda3_bridge import (
-    Lambda3Calculator,
-    HCSPValidator,
-    LambdaState,
-    StabilityPhase
-)
-
-from .physics.vorticity import (
-    VorticityCalculator,
-    VorticityResult,
-    GammaExtractor,
-    MemoryKernelFromGamma
-)
-
-# Thermodynamics
-from .physics.thermodynamics import (
-    K_B_EV,
-    T_to_beta,
-    beta_to_T,
-    thermal_energy,
-    boltzmann_weights,
-    partition_function,
-    thermal_expectation,
-    thermal_expectation_zero_T,
-    compute_entropy,
-    compute_free_energy,
-    compute_heat_capacity,
-    thermal_density_matrix,
-    sample_thermal_state,
-)
-
-# Two-Particle Reduced Density Matrix
-from .physics.rdm import (
-    RDM2Result,
-    compute_2rdm,
-    compute_2rdm_with_ops,
-    compute_density_density_correlation,
-    compute_connected_correlation,
-    compute_correlation_matrix,
-    filter_by_distance,
-    from_pyscf_rdm2,
-    to_pyscf_rdm2,
-)
-
-# =============================================================================
-# Interfaces (optional - requires PySCF)
-# =============================================================================
-
-try:
-    from .interfaces import (
-        DSECalculator,
-        PathResult as DFTPathResult,
-        ComparisonResult,
-        GeometryStep,
-        MemoryKernelDFT,
-        create_h2_stretch_path,
-        create_h2_compress_path,
-        demo_h2_comparison,
-        HAS_PYSCF,
-    )
-except ImportError:
-    HAS_PYSCF = False
-    
-    def DSECalculator(*args, **kwargs):
-        raise ImportError("PySCF required: pip install pyscf")
-    def create_h2_stretch_path(*args, **kwargs):
-        raise ImportError("PySCF required: pip install pyscf")
-    def create_h2_compress_path(*args, **kwargs):
-        raise ImportError("PySCF required: pip install pyscf")
-    def demo_h2_comparison(*args, **kwargs):
-        raise ImportError("PySCF required: pip install pyscf")
-    
-    DFTPathResult = None
-    ComparisonResult = None
-    GeometryStep = None
-    MemoryKernelDFT = None
-
-# =============================================================================
-# Visualization (optional - requires matplotlib)
-# =============================================================================
-
-try:
-    from .visualization.prl_figures import (
-        fig1_gamma_decomposition,
-        fig2_path_evolution,
-        fig3_memory_comparison,
-        generate_all_prl_figures,
-        COLORS as PRL_COLORS
-    )
-    HAS_VISUALIZATION = True
-except ImportError:
-    HAS_VISUALIZATION = False
-    
-    def fig1_gamma_decomposition(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    def fig2_path_evolution(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    def fig3_memory_comparison(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    def generate_all_prl_figures(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    PRL_COLORS = {}
-
-# =============================================================================
-# Backward Compatibility (DEPRECATED)
-# =============================================================================
-
-import warnings
-
-def _deprecated_import(name, new_location):
-    """Helper for deprecated imports."""
-    warnings.warn(
-        f"{name} is deprecated. Use {new_location} instead.",
-        DeprecationWarning,
-        stacklevel=3
-    )
-
-# Note: ThermalDSESolver and LadderDSESolver have been removed.
-# Use the new examples/ module for similar functionality:
-#   from memory_dft.examples.thermal_path import ThermalPathSolver
-#   from memory_dft.examples.ladder_2d import Ladder2DSolver
+def compute_total_spin(psi, ops):
+    """Compute total spin ⟨S²⟩."""
+    if hasattr(ops, '_engine'):
+        return ops._engine.compute_total_spin(psi)
+    raise ValueError("ops must be SpinOperatorsCompat")
 
 
-# =============================================================================
-# __all__
-# =============================================================================
+def compute_magnetization(psi, ops):
+    """Compute magnetization ⟨Sz⟩/N."""
+    if hasattr(ops, '_engine'):
+        return ops._engine.compute_magnetization(psi)
+    raise ValueError("ops must be SpinOperatorsCompat")
+
+
+def compute_correlation(psi, ops, i, j, component='Z'):
+    """Compute spin-spin correlation ⟨Si·Sj⟩."""
+    if hasattr(ops, '_engine'):
+        return ops._engine.compute_correlation(psi, i, j, component)
+    raise ValueError("ops must be SpinOperatorsCompat")
+
+
+# =========================================================================
+# __all__ for explicit exports
+# =========================================================================
 
 __all__ = [
-    # Version
-    '__version__',
-    
-    # Core - Memory Kernels
+    # Memory Kernels (4 components)
     'MemoryKernelBase',
     'PowerLawKernel',
     'StretchedExpKernel',
@@ -396,124 +263,48 @@ __all__ = [
     'CompositeMemoryKernel',
     'CompositeMemoryKernelGPU',
     'KernelWeights',
-    'SimpleMemoryKernel',
     'CatalystMemoryKernel',
     'CatalystEvent',
+    'SimpleMemoryKernel',
+    
+    # Repulsive Kernel
     'RepulsiveMemoryKernel',
     'CompressionEvent',
     'ExtendedCompositeKernel',
     
-    # Core - History
+    # History Manager
     'HistoryManager',
     'HistoryManagerGPU',
     'LambdaDensityCalculator',
     'StateSnapshot',
     
-    # Core - Unified Sparse Engine (v0.5.0)
+    # Unified Sparse Engine (v0.5.0)
     'SparseEngine',
     'SystemGeometry',
     'ComputeResult',
-    'SparseHamiltonianEngine',
     
-    # Core - Backward Compatibility
+    # Backward compatibility (Sparse Engine)
+    'SparseHamiltonianEngine',
     'HubbardEngine',
     'HubbardEngineCompat',
     'HubbardResult',
-    'SpinOperators',
-    'SpinOperatorsCompat',
-    'pauli_matrices',
-    'create_spin_operators',
-    'compute_total_spin',
-    'compute_magnetization',
-    'compute_correlation',
-    'HamiltonianBuilder',
-    'build_hamiltonian',
     
-    # Core - Lattice
+    # Lattice Geometry
     'LatticeGeometry2D',
     'LatticeGeometry',
     'create_chain',
     'create_ladder',
     'create_square_lattice',
     
-    # Solvers - Lanczos
-    'MemoryLanczosSolver',
-    'AdaptiveMemorySolver',
-    'lanczos_expm_multiply',
-    
-    # Solvers - Time Evolution
-    'TimeEvolutionEngine',
-    'EvolutionConfig',
-    'EvolutionResult',
-    'quick_evolve',
-    
-    # Solvers - Memory Indicators
-    'MemoryIndicator',
-    'MemoryMetrics',
-    'HysteresisAnalyzer',
-    
-    # Solvers - Chemical Reaction
-    'ChemicalReactionSolver',
-    'SurfaceHamiltonianEngine',
-    'LanczosEvolver',
-    'ReactionEvent',
-    'ReactionPath',
-    'PathResult',
-    
-    # Physics - Stability
-    'Lambda3Calculator',
-    'LambdaState',
-    'StabilityPhase',
-    'HCSPValidator',
-    
-    # Physics - Vorticity
-    'VorticityCalculator',
-    'VorticityResult',
-    'GammaExtractor',
-    'MemoryKernelFromGamma',
-    
-    # Physics - Thermodynamics
-    'K_B_EV',
-    'T_to_beta',
-    'beta_to_T',
-    'thermal_energy',
-    'boltzmann_weights',
-    'partition_function',
-    'thermal_expectation',
-    'thermal_expectation_zero_T',
-    'compute_entropy',
-    'compute_free_energy',
-    'compute_heat_capacity',
-    'thermal_density_matrix',
-    'sample_thermal_state',
-    
-    # Physics - 2-RDM
-    'RDM2Result',
-    'compute_2rdm',
-    'compute_2rdm_with_ops',
-    'compute_density_density_correlation',
-    'compute_connected_correlation',
-    'compute_correlation_matrix',
-    'filter_by_distance',
-    'from_pyscf_rdm2',
-    'to_pyscf_rdm2',
-    
-    # Interfaces - PySCF
-    'HAS_PYSCF',
-    'DSECalculator',
-    'DFTPathResult',
-    'ComparisonResult',
-    'GeometryStep',
-    'MemoryKernelDFT',
-    'create_h2_stretch_path',
-    'create_h2_compress_path',
-    'demo_h2_comparison',
-    
-    # Visualization
-    'HAS_VISUALIZATION',
-    'fig1_gamma_decomposition',
-    'fig2_path_evolution',
-    'fig3_memory_comparison',
-    'generate_all_prl_figures',
-    'PRL_COLORS',
+    # Backward compatibility (Operators/Hamiltonian)
+    'SpinOperators',
+    'SpinOperatorsCompat',
+    'pauli_matrices',
+    'pauli_matrices_full',
+    'create_spin_operators',
+    'compute_total_spin',
+    'compute_magnetization',
+    'compute_correlation',
+    'HamiltonianBuilder',
+    'build_hamiltonian',
 ]
