@@ -218,7 +218,7 @@ class StepKernel(MemoryKernelBase):
 
 
 # =============================================================================
-# Component 4: Exclusion Kernel (Distance-Direction Memory) [NEW]
+# Component 4: Exclusion Kernel (Distance-Direction Memory)
 # =============================================================================
 
 class ExclusionKernel(MemoryKernelBase):
@@ -542,6 +542,113 @@ class CompositeMemoryKernelGPU:
 
 
 # =============================================================================
+# Repulsive Memory Kernel (Distance-based)
+# =============================================================================
+
+class RepulsiveMemoryKernel:
+    """
+    Repulsive memory kernel for compression hysteresis.
+    
+    Uses ExclusionKernel internally for temporal memory effects.
+    
+    Physics: When atoms are compressed, they "remember" the compression
+    and show enhanced repulsion during expansion (hysteresis).
+    
+    V_eff(r, t) = V_bare(r) × [1 + enhancement(history)]
+    
+    The enhancement depends on:
+    - How close we got (minimum r in history)
+    - How recently (ExclusionKernel decay)
+    
+    Key insight:
+    Same r, different history → different V_eff!
+    This is what DFT cannot capture but DSE can.
+    """
+    
+    def __init__(self, 
+                 eta_rep: float = 0.2, 
+                 tau_rep: float = 3.0,
+                 tau_recover: float = 10.0, 
+                 r_critical: float = 0.8,
+                 n_power: float = 12.0):
+        """
+        Args:
+            eta_rep: Memory strength coefficient
+            tau_rep: Decay time for compression memory
+            tau_recover: Recovery time (elastic return)
+            r_critical: Critical distance for compression activation
+            n_power: Power for bare repulsion (r^-n)
+        """
+        self.eta_rep = eta_rep
+        self.tau_rep = tau_rep
+        self.tau_recover = tau_recover
+        self.r_critical = r_critical
+        self.n_power = n_power
+        
+        # Use ExclusionKernel for temporal weighting
+        self._exclusion_kernel = ExclusionKernel(
+            tau_rep=tau_rep,
+            tau_recover=tau_recover,
+            amplitude=1.0
+        )
+        
+        self.compression_history: List[Tuple[float, float]] = []  # [(t, r), ...]
+        self.state_history: List[Tuple[float, float, Optional[np.ndarray]]] = []
+        self.r_min_history = float('inf')
+    
+    def add_state(self, t: float, r: float, psi: Optional[np.ndarray] = None):
+        """Record state at time t with distance r."""
+        self.state_history.append((t, r, psi))
+        self.compression_history.append((t, r))
+        if r < self.r_min_history:
+            self.r_min_history = r
+    
+    def compute_repulsion_enhancement(self, t: float, r: float) -> float:
+        """
+        Compute memory-based enhancement using ExclusionKernel.
+        
+        Enhancement is higher when:
+        1. We compressed below r_critical
+        2. The compression was recent (ExclusionKernel decay)
+        """
+        if not self.compression_history:
+            return 0.0
+        
+        enhancement = 0.0
+        
+        for t_past, r_past in self.compression_history:
+            # Only count compressions below critical distance
+            if r_past < self.r_critical:
+                # Compression severity
+                compression_depth = (self.r_critical - r_past) / self.r_critical
+                
+                # Use ExclusionKernel for temporal weighting
+                kernel_weight = self._exclusion_kernel(t, t_past)
+                
+                enhancement += self.eta_rep * compression_depth * kernel_weight
+        
+        return enhancement
+    
+    def compute_effective_repulsion(self, r: float, t: float) -> float:
+        """
+        Compute effective repulsion with memory enhancement.
+        
+        V_eff = V_bare × (1 + enhancement)
+        
+        Same r, different history → different V_eff!
+        """
+        V_bare = 1.0 / (r ** self.n_power)
+        enhancement = self.compute_repulsion_enhancement(t, r)
+        return V_bare * (1.0 + enhancement)
+    
+    def clear(self):
+        """Reset all history."""
+        self.compression_history = []
+        self.state_history = []
+        self.r_min_history = float('inf')
+
+
+# =============================================================================
 # Catalyst Memory Kernel (Specialized)
 # =============================================================================
 
@@ -688,7 +795,7 @@ class SimpleMemoryKernel:
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("Memory Kernel Test (v0.4.0 - 4 Components)")
+    print("Memory Kernel Test (v0.5.0 - 4 Components + RepulsiveMemory)")
     print("=" * 70)
     
     # Create composite kernel with all 4 components
@@ -743,6 +850,37 @@ if __name__ == "__main__":
         else:
             interp = "Mostly recovered"
         print(f"  {dt:5.1f}   {K_val:.4f}   {interp}")
+    
+    # RepulsiveMemoryKernel test
+    print()
+    print("=" * 70)
+    print("RepulsiveMemoryKernel Test (Hysteresis)")
+    print("=" * 70)
+    
+    rep_kernel = RepulsiveMemoryKernel(
+        eta_rep=0.3,
+        tau_rep=3.0,
+        tau_recover=10.0,
+        r_critical=0.8
+    )
+    
+    # Simulate compression
+    print("\nCompression phase (r: 1.2 → 0.6):")
+    t = 0.0
+    for r in np.linspace(1.2, 0.6, 5):
+        rep_kernel.add_state(t, r)
+        V_eff = rep_kernel.compute_effective_repulsion(r, t)
+        print(f"  t={t:.1f}, r={r:.2f}: V_eff={V_eff:.4f}")
+        t += 1.0
+    
+    # Simulate expansion
+    print("\nExpansion phase (r: 0.6 → 1.2):")
+    for r in np.linspace(0.6, 1.2, 5):
+        rep_kernel.add_state(t, r)
+        V_eff = rep_kernel.compute_effective_repulsion(r, t)
+        enhancement = rep_kernel.compute_repulsion_enhancement(t, r)
+        print(f"  t={t:.1f}, r={r:.2f}: V_eff={V_eff:.4f} (enhancement={enhancement:.4f})")
+        t += 1.0
     
     # GPU test
     print()
