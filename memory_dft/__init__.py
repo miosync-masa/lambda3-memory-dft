@@ -27,27 +27,24 @@ Key Results:
   - Thermal path dependence: 2.26 (heating/cooling history matters)
   - Standard DFT cannot distinguish these paths (history-blind)
 
+v0.5.0 Changes:
+  - Unified SparseEngine consolidation
+  - operators.py, hamiltonian.py, hubbard_engine.py → sparse_engine_unified.py
+  - All models (Heisenberg, Ising, XY, Hubbard, Kitaev) in one place
+  - GPU/CPU automatic backend selection
+
 Structure (Refactored):
   memory_dft/
-  ├── cli/                      # Command-line interface (REFACTORED)
+  ├── cli/                      # Command-line interface
   │   ├── __init__.py           # Typer app & command registration
   │   ├── utils.py              # Shared CLI utilities
   │   └── commands/             # Individual command modules
-  │       ├── info.py           # memory-dft info
-  │       ├── run.py            # memory-dft run
-  │       ├── compare.py        # memory-dft compare
-  │       ├── thermal.py        # memory-dft thermal
-  │       ├── dft_compare.py    # memory-dft dft-compare
-  │       ├── lattice.py        # memory-dft lattice
-  │       ├── hysteresis.py     # memory-dft hysteresis
-  │       └── gamma.py          # memory-dft gamma
   ├── core/
   │   ├── memory_kernel.py      # 4-layer kernel (field/phys/chem/exclusion)
   │   ├── repulsive_kernel.py   # Compression memory
   │   ├── history_manager.py    # History tracking
-  │   ├── sparse_engine.py      # Sparse Hamiltonian
+  │   ├── sparse_engine_unified.py  # Unified sparse engine (v0.5.0)
   │   └── lattice.py            # Lattice geometry
-  │    
   ├── solvers/
   │   ├── lanczos_memory.py     # Lanczos + memory
   │   ├── time_evolution.py     # Time evolution
@@ -60,13 +57,8 @@ Structure (Refactored):
   │   └── rdm.py                # 2-RDM analysis
   ├── interfaces/               # External package interfaces
   │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
-  ├── examples/                 # Example scripts
-  │   ├── thermal_path.py       # Thermal path demo
-  │   └── ladder_2d.py          # 2D lattice demo
-  ├── visualization/
-  │   └── prl_figures.py        # PRL publication figures
-  └── tests/
-      └── ...                   # Test suites
+  └── visualization/
+      └── prl_figures.py        # PRL publication figures
 
 Reference:
   Lie & Fullwood, PRL 135, 230204 (2025)
@@ -112,20 +104,33 @@ from .core.history_manager import (
     StateSnapshot
 )
 
-# Sparse Engine
-from .core.sparse_engine import (
-    SparseHamiltonianEngine,
-)
+# =============================================================================
+# Unified Sparse Engine (v0.5.0)
+# Replaces: sparse_engine.py, hubbard_engine.py, operators.py, hamiltonian.py
+# =============================================================================
 
-# Hubbard Engine
-from .core.hubbard_engine import (
-    HubbardEngine,
-    HubbardResult
-)
-
-# Lattice Geometry
-from .core.lattice import (
+from .core.sparse_engine_unified import (
+    # Main class
+    SparseEngine,
+    # Data classes
     SystemGeometry,
+    ComputeResult,
+    # Backward compatibility aliases
+    SparseHamiltonianEngine,
+    SpinOperatorsCompat,
+    HubbardEngineCompat,
+)
+
+# Backward compatibility aliases
+HubbardEngine = HubbardEngineCompat
+HubbardResult = ComputeResult
+SpinOperators = SpinOperatorsCompat
+
+# =============================================================================
+# Lattice Geometry
+# =============================================================================
+
+from .core.lattice import (
     LatticeGeometry2D,
     LatticeGeometry,
     create_chain,
@@ -133,21 +138,85 @@ from .core.lattice import (
     create_square_lattice,
 )
 
-# Spin Operators
-from .core.operators import (
-    SpinOperators,
-    pauli_matrices,
-    create_spin_operators,
-    compute_total_spin,
-    compute_magnetization,
-    compute_correlation,
-)
+# =============================================================================
+# Backward Compatibility - Operators & Hamiltonian
+# =============================================================================
 
-# Hamiltonian Builders
-from .core.hamiltonian import (
-    HamiltonianBuilder,
-    build_hamiltonian,
-)
+def pauli_matrices():
+    """Return Pauli matrices (σx, σy, σz)."""
+    import numpy as np
+    sx = np.array([[0, 0.5], [0.5, 0]], dtype=np.complex128)
+    sy = np.array([[0, -0.5j], [0.5j, 0]], dtype=np.complex128)
+    sz = np.array([[0.5, 0], [0, -0.5]], dtype=np.complex128)
+    return sx, sy, sz
+
+
+def create_spin_operators(n_sites, use_gpu=False):
+    """Create spin operators for n_sites."""
+    return SpinOperatorsCompat(n_sites, use_gpu=use_gpu)
+
+
+def compute_total_spin(psi, ops):
+    """Compute total spin ⟨S²⟩."""
+    if hasattr(ops, '_engine'):
+        return ops._engine.compute_total_spin(psi)
+    raise ValueError("ops must be SpinOperatorsCompat")
+
+
+def compute_magnetization(psi, ops):
+    """Compute magnetization ⟨Sz⟩/N."""
+    if hasattr(ops, '_engine'):
+        return ops._engine.compute_magnetization(psi)
+    raise ValueError("ops must be SpinOperatorsCompat")
+
+
+def compute_correlation(psi, ops, i, j, component='Z'):
+    """Compute spin-spin correlation ⟨Si·Sj⟩."""
+    if hasattr(ops, '_engine'):
+        return ops._engine.compute_correlation(psi, i, j, component)
+    raise ValueError("ops must be SpinOperatorsCompat")
+
+
+class HamiltonianBuilder:
+    """
+    Backward compatibility wrapper for HamiltonianBuilder.
+    
+    New code should use SparseEngine directly:
+        engine = SparseEngine(n_sites)
+        H = engine.build_heisenberg(bonds, J=1.0)
+    """
+    def __init__(self, lattice, ops):
+        self._engine = ops._engine if hasattr(ops, '_engine') else \
+                       SparseEngine(lattice.N_spins, use_gpu=False, verbose=False)
+        self._bonds = lattice.bonds_nn if hasattr(lattice, 'bonds_nn') else lattice.bonds
+    
+    def heisenberg(self, J=1.0, Jz=None):
+        return self._engine.build_heisenberg(self._bonds, J=J, Jz=Jz, split_KV=False)
+    
+    def xy(self, J=1.0):
+        return self._engine.build_xy(self._bonds, J=J)
+    
+    def ising(self, J=1.0, h=0.0):
+        return self._engine.build_ising(self._bonds, J=J, h=h, split_KV=False)
+    
+    def kitaev_rect(self, Kx=1.0, Ky=0.8, Kz_diag=0.5):
+        return self._engine.build_kitaev_rect(Kx=Kx, Ky=Ky, Kz_diag=Kz_diag)
+
+
+def build_hamiltonian(model, lattice, ops, **kwargs):
+    """Build Hamiltonian for given model."""
+    builder = HamiltonianBuilder(lattice, ops)
+    if model == 'heisenberg':
+        return builder.heisenberg(**kwargs)
+    elif model == 'xy':
+        return builder.xy(**kwargs)
+    elif model == 'ising':
+        return builder.ising(**kwargs)
+    elif model == 'kitaev':
+        return builder.kitaev_rect(**kwargs)
+    else:
+        raise ValueError(f"Unknown model: {model}")
+
 
 # =============================================================================
 # Solvers
@@ -338,30 +407,32 @@ __all__ = [
     'LambdaDensityCalculator',
     'StateSnapshot',
     
-    # Core - Engines
-    'SparseHamiltonianEngine',
-    'HubbardEngine',
-    'HubbardResult',
-    
-    # Core - Lattice
+    # Core - Unified Sparse Engine (v0.5.0)
+    'SparseEngine',
     'SystemGeometry',
-    'LatticeGeometry2D',
-    'LatticeGeometry',
-    'create_chain',
-    'create_ladder',
-    'create_square_lattice',
+    'ComputeResult',
+    'SparseHamiltonianEngine',
     
-    # Core - Operators
+    # Core - Backward Compatibility
+    'HubbardEngine',
+    'HubbardEngineCompat',
+    'HubbardResult',
     'SpinOperators',
+    'SpinOperatorsCompat',
     'pauli_matrices',
     'create_spin_operators',
     'compute_total_spin',
     'compute_magnetization',
     'compute_correlation',
-    
-    # Core - Hamiltonian
     'HamiltonianBuilder',
     'build_hamiltonian',
+    
+    # Core - Lattice
+    'LatticeGeometry2D',
+    'LatticeGeometry',
+    'create_chain',
+    'create_ladder',
+    'create_square_lattice',
     
     # Solvers - Lanczos
     'MemoryLanczosSolver',
@@ -425,7 +496,7 @@ __all__ = [
     'from_pyscf_rdm2',
     'to_pyscf_rdm2',
     
-    # Interfaces - PySCF (NEW)
+    # Interfaces - PySCF
     'HAS_PYSCF',
     'DSECalculator',
     'DFTPathResult',
