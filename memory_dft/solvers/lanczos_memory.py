@@ -46,35 +46,92 @@ except ImportError:
     HAS_CUPY = False
 
 
+def _detect_backend(H_sparse, psi):
+    """
+    Detect backend from H_sparse and psi, ensuring consistency.
+    
+    Returns:
+        xp: numpy or cupy module
+        H: Hamiltonian in correct backend
+        psi: State vector in correct backend
+        use_gpu: Whether GPU is being used
+    """
+    # Check if H is CuPy sparse
+    H_is_cupy = HAS_CUPY and hasattr(H_sparse, 'get')
+    
+    # Check if psi is CuPy array
+    psi_is_cupy = HAS_CUPY and isinstance(psi, cp.ndarray)
+    
+    # Determine target backend (prefer GPU if either is on GPU)
+    use_gpu = H_is_cupy or psi_is_cupy
+    
+    if use_gpu and HAS_CUPY:
+        xp = cp
+        # Convert H to GPU if needed
+        if not H_is_cupy:
+            H = csp.csr_matrix(H_sparse)
+        else:
+            H = H_sparse
+        # Convert psi to GPU if needed
+        if not psi_is_cupy:
+            psi = cp.asarray(psi)
+        else:
+            psi = psi
+    else:
+        xp = np
+        # Convert H to CPU if needed
+        if H_is_cupy:
+            H = H_sparse.get()
+        else:
+            H = H_sparse
+        # Convert psi to CPU if needed
+        if psi_is_cupy:
+            psi = psi.get()
+        else:
+            psi = psi
+    
+    return xp, H, psi, use_gpu
+
+
 def lanczos_expm_multiply(H_sparse, psi, dt, krylov_dim=30):
     """
     Lanczos法による exp(-i H dt) |ψ⟩ の計算
     
-    CuPy/NumPy 両対応版
+    CuPy/NumPy 両対応版（自動バックエンド検出）
+    
+    Args:
+        H_sparse: Hamiltonian (scipy or cupyx sparse matrix)
+        psi: State vector (numpy or cupy array)
+        dt: Time step
+        krylov_dim: Krylov subspace dimension
+        
+    Returns:
+        psi_new: Time-evolved state (same backend as input psi)
     """
-    # Backend detection
-    if HAS_CUPY and isinstance(psi, cp.ndarray):
-        xp = cp
-    else:
-        xp = np
-        # Ensure psi is numpy array
-        if hasattr(psi, 'get'):
-            psi = psi.get()
+    # Detect and unify backend
+    xp, H, v_input, use_gpu = _detect_backend(H_sparse, psi)
     
-    n = psi.shape[0]
+    n = v_input.shape[0]
     
+    # Allocate Krylov vectors
     V = xp.zeros((krylov_dim, n), dtype=xp.complex128)
-    alpha = np.zeros(krylov_dim, dtype=np.float64)
+    alpha = np.zeros(krylov_dim, dtype=np.float64)  # Always on CPU for scipy_expm
     beta = np.zeros(krylov_dim - 1, dtype=np.float64)
     
-    norm_psi = float(xp.linalg.norm(psi))
-    v = psi / norm_psi
+    # Normalize initial vector
+    norm_psi = float(xp.linalg.norm(v_input))
+    if norm_psi < 1e-15:
+        return v_input  # Zero vector, return as-is
+    
+    v = v_input / norm_psi
     V[0] = v
     
-    w = H_sparse @ v
+    # First Lanczos step
+    w = H @ v
     alpha[0] = float(xp.real(xp.vdot(v, w)))
     w = w - alpha[0] * v
     
+    # Build tridiagonal matrix
     actual_dim = krylov_dim
     for j in range(1, krylov_dim):
         beta_j = float(xp.linalg.norm(w))
@@ -87,29 +144,43 @@ def lanczos_expm_multiply(H_sparse, psi, dt, krylov_dim=30):
         v_new = w / beta_j
         V[j] = v_new
         
-        w = H_sparse @ v_new
+        w = H @ v_new
         alpha[j] = float(xp.real(xp.vdot(v_new, w)))
         w = w - alpha[j] * v_new - beta[j-1] * V[j-1]
     
+    # Build tridiagonal matrix T (on CPU)
     T = np.diag(alpha[:actual_dim])
     if actual_dim > 1:
         T += np.diag(beta[:actual_dim-1], k=1)
         T += np.diag(beta[:actual_dim-1], k=-1)
     
+    # Compute exp(-i dt T) on CPU (scipy is fast enough for small matrices)
     exp_T = scipy_expm(-1j * dt * T)
     
+    # Apply to first basis vector
     e0 = np.zeros(actual_dim, dtype=np.complex128)
     e0[0] = 1.0
     y = exp_T @ e0
     
-    if xp == cp:
+    # Convert back to target backend
+    if use_gpu:
         y_xp = cp.asarray(y)
     else:
         y_xp = y
-        
+    
+    # Reconstruct solution
     psi_new = norm_psi * (V[:actual_dim].T @ y_xp)
     
-    return psi_new / xp.linalg.norm(psi_new)
+    # Normalize
+    psi_new = psi_new / xp.linalg.norm(psi_new)
+    
+    # Return in same format as input psi
+    if HAS_CUPY and isinstance(psi, cp.ndarray) and not use_gpu:
+        return cp.asarray(psi_new)
+    elif not (HAS_CUPY and isinstance(psi, cp.ndarray)) and use_gpu:
+        return psi_new.get()
+    
+    return psi_new
 
 
 class MemoryLanczosSolver:
@@ -178,8 +249,14 @@ class MemoryLanczosSolver:
         """
         xp = self.xp
         
-        # 1. 標準Lanczos発展
+        # 1. 標準Lanczos発展（自動バックエンド検出）
         psi_unitary = lanczos_expm_multiply(H, psi, dt, self.krylov_dim)
+        
+        # Ensure output is on correct backend
+        if self.use_gpu and isinstance(psi_unitary, np.ndarray):
+            psi_unitary = cp.asarray(psi_unitary)
+        elif not self.use_gpu and HAS_CUPY and isinstance(psi_unitary, cp.ndarray):
+            psi_unitary = psi_unitary.get()
         
         # 2. Memory項を計算
         psi_memory = self.history.compute_memory_state(self.kernel, t_current)
