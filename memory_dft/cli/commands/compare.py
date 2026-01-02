@@ -39,9 +39,9 @@ class PathComparisonRunner:
     def __init__(self, sites: int = 4):
         self.sites = sites
         
-        # Import core modules
+        # Import core modules (v0.5.0: unified imports)
         try:
-            from memory_dft.core.hubbard_engine import HubbardEngine
+            from memory_dft.core import HubbardEngine  # via sparse_engine_unified
             from memory_dft.core.memory_kernel import CatalystMemoryKernel, CatalystEvent
             
             self.HubbardEngine = HubbardEngine
