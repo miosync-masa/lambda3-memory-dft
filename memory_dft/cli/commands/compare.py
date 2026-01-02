@@ -211,6 +211,22 @@ def compare(
     typer.echo(f"  |Δλ| Memoryless:   {results['diff_std']:.6f}")
     typer.echo(f"  |Δλ| With Memory:  {results['diff_mem']:.4f}")
     
+    # Memory metrics display
+    metrics_std = results.get('memory_metrics_std')
+    metrics_mem = results.get('memory_metrics_mem')
+    if metrics_std is not None and metrics_mem is not None:
+        print_section("Memory Indicators", "🧠")
+        typer.echo("  Memoryless approach:")
+        typer.echo(f"    ΔO (path non-commutativity): {metrics_std.delta_O:.6f}")
+        typer.echo(f"    M (temporal memory):         {metrics_std.M_temporal:.6f}")
+        typer.echo(f"    Non-Markovian? {metrics_std.is_non_markovian()}")
+        typer.echo("")
+        typer.echo("  With Memory approach:")
+        typer.echo(f"    ΔO (path non-commutativity): {metrics_mem.delta_O:.6f}")
+        typer.echo(f"    M (temporal memory):         {metrics_mem.M_temporal:.6f}")
+        typer.echo(f"    Non-Markovian? {metrics_mem.is_non_markovian()}")
+        typer.echo("")
+    
     if results['diff_std'] < 1e-6:
         typer.echo(f"\n  🎯 Memoryless: Cannot distinguish paths! (Δλ ≈ 0)")
         typer.echo(f"  🎯 With Memory: REVEALS difference! (Δλ = {results['diff_mem']:.4f})")
