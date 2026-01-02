@@ -27,20 +27,13 @@ import numpy as np
 import sys
 import time
 
-# Import path setup
-import os
-_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _root not in sys.path:
-    sys.path.insert(0, _root)
-
-# v0.5.0: Use unified engine
-from core.sparse_engine_unified import HubbardEngine, HubbardResult
-from core.memory_kernel import (
+# v0.5.0: Use unified engine (package-based imports)
+from memory_dft.core.sparse_engine_unified import HubbardEngine, HubbardResult
+from memory_dft.core.memory_kernel import (
     SimpleMemoryKernel,
     CatalystMemoryKernel,
     CatalystEvent
 )
-from physics.vorticity import VorticityCalculator
 
 
 def test_A_path_dependence():
