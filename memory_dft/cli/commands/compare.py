@@ -23,6 +23,13 @@ from ..utils import (
     save_json, error_exit
 )
 
+# Memory quantification
+try:
+    from memory_dft.solvers.memory_indicators import MemoryIndicator, MemoryMetrics
+    HAS_MEMORY_INDICATORS = True
+except ImportError:
+    HAS_MEMORY_INDICATORS = False
+
 
 # =============================================================================
 # Path Comparison Runner
@@ -113,11 +120,32 @@ class PathComparisonRunner:
         diff_std = abs(result1['std'] - result2['std'])
         diff_mem = abs(result1['mem'] - result2['mem'])
         
+        # Compute memory metrics
+        memory_metrics_std = None
+        memory_metrics_mem = None
+        if HAS_MEMORY_INDICATORS:
+            # For memoryless (should show ~0)
+            memory_metrics_std = MemoryIndicator.compute_all(
+                O_forward=result1['std'],
+                O_backward=result2['std'],
+                series=np.array(result1['lambdas_std']),
+                dt=dt
+            )
+            # For with-memory (should show non-zero)
+            memory_metrics_mem = MemoryIndicator.compute_all(
+                O_forward=result1['mem'],
+                O_backward=result2['mem'],
+                series=np.array(result1['lambdas_mem']),
+                dt=dt
+            )
+        
         return {
             'path1': result1,
             'path2': result2,
             'diff_std': diff_std,
             'diff_mem': diff_mem,
+            'memory_metrics_std': memory_metrics_std,
+            'memory_metrics_mem': memory_metrics_mem,
         }
 
 
