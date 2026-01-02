@@ -30,6 +30,13 @@ from ..utils import (
     save_json, error_exit
 )
 
+# Memory quantification
+try:
+    from memory_dft.solvers.memory_indicators import MemoryIndicator, MemoryMetrics
+    HAS_MEMORY_INDICATORS = True
+except ImportError:
+    HAS_MEMORY_INDICATORS = False
+
 
 # =============================================================================
 # Thermal-DSE Runner (Using Unified SparseEngine)
@@ -326,6 +333,16 @@ class ThermalDSERunner:
         delta_lambda_dse = abs(result1['lambda_final'] - result2['lambda_final'])
         delta_lambda_dft = 0.0  # DFT is path-independent by construction
         
+        # Compute memory metrics
+        memory_metrics = None
+        if HAS_MEMORY_INDICATORS:
+            memory_metrics = MemoryIndicator.compute_all(
+                O_forward=result1['lambda_final'],
+                O_backward=result2['lambda_final'],
+                series=np.array(result1['lambdas']),
+                dt=dt
+            )
+        
         return {
             'path1': {
                 'label': f'{T_low}K→{T_high}K→{T_final}K',
@@ -346,6 +363,7 @@ class ThermalDSERunner:
             'dse': {
                 'delta': delta_lambda_dse,
             },
+            'memory_metrics': memory_metrics,
             'T_final': T_final,
             'entropy': self.compute_entropy(T_final),
         }
@@ -435,6 +453,18 @@ def thermal(
     typer.echo(f"    |ΔΛ|: {delta_dse:.4f}")
     typer.echo(f"    Entropy S/k_B: {results['entropy']:.4f}")
     typer.echo("")
+    
+    # Memory metrics display
+    metrics = results.get('memory_metrics')
+    if metrics is not None:
+        print_section("Memory Indicators", "🧠")
+        typer.echo(f"  ΔO (path non-commutativity): {metrics.delta_O:.6f}")
+        typer.echo(f"  M (temporal memory):         {metrics.M_temporal:.6f}")
+        typer.echo(f"  τ_memory (autocorr time):    {metrics.autocorr_time:.4f}")
+        if metrics.gamma_memory is not None:
+            typer.echo(f"  γ_memory (non-Markovian):    {metrics.gamma_memory:.4f}")
+        typer.echo(f"  Non-Markovian? {metrics.is_non_markovian()}")
+        typer.echo("")
     
     if delta_dse > 0.01:
         typer.echo("  ✨ Path dependence detected!")
