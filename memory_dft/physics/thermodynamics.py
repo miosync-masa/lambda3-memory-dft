@@ -387,6 +387,28 @@ class ThermalPathEvolver:
     
     def _diagonalize(self, H, n_states: int):
         """Diagonalize H and return eigenvalues/vectors on CPU."""
+        dim = H.shape[0]
+        
+        # CuPy eigsh requires k < n - 1 with margin
+        max_k = max(1, dim - 3)  # Safety margin for CuPy
+        n_states = min(n_states, max_k)
+        
+        # For small matrices, use dense solver
+        if dim <= 32 or n_states >= dim - 2:
+            if self.engine.use_gpu:
+                import cupy as cp
+                H_dense = H.toarray()
+                eigenvalues, eigenvectors = cp.linalg.eigh(H_dense)
+                eigenvalues = eigenvalues[:n_states].get()
+                eigenvectors = eigenvectors[:, :n_states]
+            else:
+                H_dense = H.toarray()
+                eigenvalues, eigenvectors = np.linalg.eigh(H_dense)
+                eigenvalues = eigenvalues[:n_states]
+                eigenvectors = eigenvectors[:, :n_states]
+            return eigenvalues, eigenvectors
+        
+        # Sparse eigensolver for larger matrices
         eigenvalues, eigenvectors = self.engine.eigsh(H, k=n_states, which='SA')
         
         # Eigenvalues always to CPU for Boltzmann
@@ -395,7 +417,6 @@ class ThermalPathEvolver:
         else:
             eigenvalues_cpu = eigenvalues
         
-        # Eigenvectors stay on same device as H
         return eigenvalues_cpu, eigenvectors
     
     def evolve(self, temperatures: List[float],
