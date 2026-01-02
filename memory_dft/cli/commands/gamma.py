@@ -45,9 +45,9 @@ class GammaRunner:
     """
     
     def __init__(self):
-        # Import Hubbard engine from core
+        # Import Hubbard engine from core (v0.5.0: unified)
         try:
-            from memory_dft.core.hubbard_engine import HubbardEngine
+            from memory_dft.core import HubbardEngine  # via sparse_engine_unified
             self.HubbardEngine = HubbardEngine
         except ImportError as e:
             raise ImportError(f"Could not import HubbardEngine: {e}")
