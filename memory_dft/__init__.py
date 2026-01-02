@@ -46,10 +46,8 @@ Structure (Refactored):
   │   ├── repulsive_kernel.py   # Compression memory
   │   ├── history_manager.py    # History tracking
   │   ├── sparse_engine.py      # Sparse Hamiltonian
-  │   ├── hubbard_engine.py     # Hubbard model
-  │   ├── lattice.py            # Lattice geometry
-  │   ├── operators.py          # Spin operators
-  │   └── hamiltonian.py        # Hamiltonian builders
+  │   └── lattice.py            # Lattice geometry
+  │    
   ├── solvers/
   │   ├── lanczos_memory.py     # Lanczos + memory
   │   ├── time_evolution.py     # Time evolution
