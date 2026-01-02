@@ -349,9 +349,11 @@ class LatticeDSERunner:
         try:
             # Sparse eigensolve for lowest n_states
             eigenvalues, eigenvectors = self.engine.eigsh(H, k=n_states, which='SA')
+            # eigenvalues → CPU (for Boltzmann weights with np.exp)
+            # eigenvectors → GPU (for matrix operations)
             if self.engine.use_gpu:
                 eigenvalues = eigenvalues.get()
-                eigenvectors = eigenvectors.get()
+                # eigenvectors stays on GPU!
             return eigenvalues, eigenvectors
         except Exception:
             # Fallback to dense
@@ -360,19 +362,26 @@ class LatticeDSERunner:
             else:
                 H_dense = H.toarray()
             eigenvalues, eigenvectors = np.linalg.eigh(H_dense)
-            return eigenvalues[:n_states], eigenvectors[:, :n_states]
+            eigenvalues = eigenvalues[:n_states]
+            eigenvectors = eigenvectors[:, :n_states]
+            # Convert eigenvectors to GPU if needed
+            if self.engine.use_gpu:
+                eigenvectors = xp.asarray(eigenvectors)
+            return eigenvalues, eigenvectors
     
     def evolve_thermal_path(self, temperatures: List[float], H, H_K, H_V,
-                            eigenvalues: np.ndarray, eigenvectors: np.ndarray,
+                            eigenvalues: np.ndarray, eigenvectors,
                             dt: float = 0.1) -> Dict[str, Any]:
         """
         Evolve along temperature path with thermal ensemble tracking.
         
         Each eigenstate evolves, weighted by Boltzmann factors.
+        Note: eigenvalues is NumPy, eigenvectors is GPU (CuPy) or CPU (NumPy)
         """
+        xp = self.engine.xp
         n_states = len(eigenvalues)
         
-        # Initialize: each eigenstate at its energy
+        # Initialize: each eigenstate at its energy (stays on same device)
         psi_list = [eigenvectors[:, n].copy() for n in range(n_states)]
         
         # Temperature evolution
@@ -383,7 +392,7 @@ class LatticeDSERunner:
             # Time evolve each state
             for n in range(n_states):
                 psi_list[n] = self.time_evolve(psi_list[n], H, dt)
-                psi_list[n] = psi_list[n] / np.linalg.norm(psi_list[n])
+                psi_list[n] = psi_list[n] / xp.linalg.norm(psi_list[n])
         
         # Final thermal average
         beta_final = self.T_to_beta(temperatures[-1])
@@ -397,8 +406,8 @@ class LatticeDSERunner:
             if weights[n] > 1e-6:
                 active_indices.append(n)
                 psi_n = psi_list[n]
-                K_n = float(np.real(np.vdot(psi_n, H_K @ psi_n)))
-                V_n = float(np.real(np.vdot(psi_n, H_V @ psi_n)))
+                K_n = float(xp.real(xp.vdot(psi_n, H_K @ psi_n)))
+                V_n = float(xp.real(xp.vdot(psi_n, H_V @ psi_n)))
                 K_total += weights[n] * K_n
                 V_total += weights[n] * V_n
         
@@ -435,11 +444,12 @@ class LatticeDSERunner:
                                             eigenvalues, eigenvectors)
         
         # Equilibrium (static)
+        xp = self.engine.xp
         beta_final = self.T_to_beta(T_final)
         weights = self.boltzmann_weights(eigenvalues, beta_final)
-        K_eq = sum(weights[n] * float(np.real(np.vdot(eigenvectors[:,n], 
+        K_eq = sum(weights[n] * float(xp.real(xp.vdot(eigenvectors[:,n], 
                    H_K @ eigenvectors[:,n]))) for n in range(len(eigenvalues)))
-        V_eq = sum(weights[n] * float(np.real(np.vdot(eigenvectors[:,n],
+        V_eq = sum(weights[n] * float(xp.real(xp.vdot(eigenvectors[:,n],
                    H_V @ eigenvectors[:,n]))) for n in range(len(eigenvalues)))
         lambda_eq = abs(K_eq) / (abs(V_eq) + 1e-10)
         
