@@ -47,7 +47,7 @@ from scipy.sparse.linalg import eigsh as eigsh_cpu
 
 
 # =============================================================================
-# Data Classes
+# Geometry Classes (merged from lattice.py)
 # =============================================================================
 
 @dataclass
@@ -73,7 +73,7 @@ class SystemGeometry:
     
     @property
     def N_spins(self) -> int:
-        """Alias for n_sites (compatibility)."""
+        """Alias for n_sites (compatibility with LatticeGeometry2D)."""
         return self.n_sites
     
     @property
@@ -82,10 +82,211 @@ class SystemGeometry:
         return self.dim
     
     @property
+    def n_bonds(self) -> int:
+        """Number of bonds."""
+        return len(self.bonds)
+    
+    @property
     def bonds_nn(self) -> List[Tuple[int, int]]:
         """Alias for bonds (compatibility with LatticeGeometry2D)."""
         return self.bonds
+    
+    def __repr__(self) -> str:
+        plaq_str = f", {len(self.plaquettes)} plaq" if self.plaquettes else ""
+        return f"SystemGeometry(N={self.n_sites}, {self.n_bonds} bonds{plaq_str})"
 
+
+class LatticeGeometry2D:
+    """
+    2D lattice geometry with configurable boundary conditions.
+    
+    Supports rectangular lattices with independent periodic boundary
+    conditions in x and y directions.
+    
+    Attributes:
+        Lx: Number of sites in x-direction
+        Ly: Number of sites in y-direction
+        periodic_x: Periodic boundary in x-direction
+        periodic_y: Periodic boundary in y-direction
+        N_spins: Total number of spins (Lx * Ly)
+        Dim: Hilbert space dimension (2^N_spins)
+        
+    Bond classifications:
+        bonds_nn: All nearest-neighbor bonds (unique pairs)
+        bonds_x: Bonds in x-direction (including periodic)
+        bonds_y: Bonds in y-direction (including periodic)
+    """
+    
+    def __init__(self, 
+                 Lx: int, 
+                 Ly: int, 
+                 periodic_x: bool = False, 
+                 periodic_y: bool = False):
+        self.Lx = Lx
+        self.Ly = Ly
+        self.periodic_x = periodic_x
+        self.periodic_y = periodic_y
+        self.N_spins = Lx * Ly
+        self.Dim = 2 ** self.N_spins
+        
+        # Build geometry
+        self.coords = self._build_coords()
+        self.bonds_nn, self.bonds_x, self.bonds_y = self._build_nn_bonds()
+        self.plaquettes = self._build_plaquettes()
+    
+    @property
+    def bonds(self) -> List[Tuple[int, int]]:
+        """Alias for bonds_nn (compatibility with SystemGeometry)."""
+        return self.bonds_nn
+    
+    @property
+    def n_sites(self) -> int:
+        """Alias for N_spins (compatibility with SystemGeometry)."""
+        return self.N_spins
+    
+    def idx(self, x: int, y: int) -> int:
+        """Convert (x, y) coordinates to linear site index."""
+        return y * self.Lx + x
+    
+    def coords_from_idx(self, i: int) -> Tuple[int, int]:
+        """Convert linear site index to (x, y) coordinates."""
+        return (i % self.Lx, i // self.Lx)
+    
+    def _build_coords(self) -> Dict[int, Tuple[int, int]]:
+        """Build site index to coordinate mapping."""
+        return {self.idx(x, y): (x, y) 
+                for y in range(self.Ly) 
+                for x in range(self.Lx)}
+    
+    def _build_nn_bonds(self) -> Tuple[List[Tuple[int, int]], 
+                                        List[Tuple[int, int]], 
+                                        List[Tuple[int, int]]]:
+        """Build nearest-neighbor bond lists."""
+        from typing import Set
+        bonds_set: Set[Tuple[int, int]] = set()
+        bonds_x: List[Tuple[int, int]] = []
+        bonds_y: List[Tuple[int, int]] = []
+        
+        for y in range(self.Ly):
+            for x in range(self.Lx):
+                i = self.idx(x, y)
+                
+                # x-direction bond
+                if x + 1 < self.Lx or self.periodic_x:
+                    j = self.idx((x + 1) % self.Lx, y)
+                    if i < j:
+                        bonds_set.add((i, j))
+                    else:
+                        bonds_set.add((j, i))
+                    bonds_x.append((i, j))
+                
+                # y-direction bond
+                if y + 1 < self.Ly or self.periodic_y:
+                    j = self.idx(x, (y + 1) % self.Ly)
+                    if i < j:
+                        bonds_set.add((i, j))
+                    else:
+                        bonds_set.add((j, i))
+                    bonds_y.append((i, j))
+        
+        return sorted(list(bonds_set)), bonds_x, bonds_y
+    
+    def _build_plaquettes(self) -> List[Tuple[int, int, int, int]]:
+        """Build elementary plaquettes (square loops)."""
+        plaquettes: List[Tuple[int, int, int, int]] = []
+        
+        x_range = self.Lx if self.periodic_x else self.Lx - 1
+        y_range = self.Ly if self.periodic_y else self.Ly - 1
+        
+        for y in range(y_range):
+            for x in range(x_range):
+                bl = self.idx(x, y)
+                br = self.idx((x + 1) % self.Lx, y)
+                tr = self.idx((x + 1) % self.Lx, (y + 1) % self.Ly)
+                tl = self.idx(x, (y + 1) % self.Ly)
+                plaquettes.append((bl, br, tr, tl))
+        
+        return plaquettes
+    
+    def to_system_geometry(self) -> 'SystemGeometry':
+        """Convert to SystemGeometry for compatibility."""
+        return SystemGeometry(
+            n_sites=self.N_spins,
+            bonds=self.bonds_nn,
+            plaquettes=self.plaquettes
+        )
+    
+    def get_site_neighbors(self, i: int) -> List[int]:
+        """Get all nearest neighbors of site i."""
+        neighbors = []
+        for (a, b) in self.bonds_nn:
+            if a == i:
+                neighbors.append(b)
+            elif b == i:
+                neighbors.append(a)
+        return neighbors
+    
+    def get_bond_direction(self, i: int, j: int) -> Optional[str]:
+        """Determine the direction of bond (i, j)."""
+        if (i, j) in self.bonds_x or (j, i) in self.bonds_x:
+            return 'x'
+        if (i, j) in self.bonds_y or (j, i) in self.bonds_y:
+            return 'y'
+        return None
+    
+    def __repr__(self) -> str:
+        bc_x = "P" if self.periodic_x else "O"
+        bc_y = "P" if self.periodic_y else "O"
+        return (f"LatticeGeometry2D({self.Lx}×{self.Ly}, BC={bc_x}{bc_y}, "
+                f"N={self.N_spins}, bonds={len(self.bonds_nn)})")
+
+
+# Alias for backward compatibility
+LatticeGeometry = LatticeGeometry2D
+
+
+# =============================================================================
+# Factory Functions for Geometry
+# =============================================================================
+
+def create_chain(L: int, periodic: bool = True) -> SystemGeometry:
+    """Create 1D chain geometry."""
+    if periodic:
+        bonds = [(i, (i + 1) % L) for i in range(L)]
+    else:
+        bonds = [(i, i + 1) for i in range(L - 1)]
+    return SystemGeometry(n_sites=L, bonds=bonds)
+
+
+def create_ladder(L: int, periodic: bool = True) -> SystemGeometry:
+    """Create 2-leg ladder geometry."""
+    N = 2 * L
+    
+    if periodic:
+        leg0 = [(i, (i + 1) % L) for i in range(L)]
+        leg1 = [(L + i, L + (i + 1) % L) for i in range(L)]
+    else:
+        leg0 = [(i, i + 1) for i in range(L - 1)]
+        leg1 = [(L + i, L + i + 1) for i in range(L - 1)]
+    
+    rungs = [(i, L + i) for i in range(L)]
+    bonds = leg0 + leg1 + rungs
+    
+    plaquettes = []
+    plaq_range = L if periodic else L - 1
+    for i in range(plaq_range):
+        bl, br = i, (i + 1) % L
+        tl, tr = L + i, L + (i + 1) % L
+        plaquettes.append((bl, br, tr, tl))
+    
+    return SystemGeometry(n_sites=N, bonds=bonds, plaquettes=plaquettes)
+
+
+def create_square_lattice(Lx: int, Ly: int, 
+                          periodic_x: bool = False,
+                          periodic_y: bool = False) -> LatticeGeometry2D:
+    """Create 2D square lattice geometry."""
+    return LatticeGeometry2D(Lx, Ly, periodic_x, periodic_y)
 
 @dataclass
 class ComputeResult:
