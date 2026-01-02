@@ -109,6 +109,10 @@ class LatticeDSERunner:
         """Build Hamiltonian with optional transverse field."""
         bonds = self.geometry.bonds
         
+        # Safety check
+        if not bonds and self.model != 'kitaev':
+            raise ValueError(f"No bonds found! Lattice {self.lx}x{self.ly} requires at least 2 sites.")
+        
         if self.model == 'heisenberg':
             H = self.engine.build_heisenberg(bonds, J=self.j, split_KV=False)
         elif self.model == 'xy':
@@ -121,6 +125,10 @@ class LatticeDSERunner:
         else:
             raise ValueError(f"Unknown model: {self.model}")
         
+        # Verify Hamiltonian
+        if H is None:
+            raise ValueError(f"Failed to build {self.model} Hamiltonian.")
+        
         # Add transverse field for non-Ising models
         if abs(h_field) > 1e-10:
             H = H + h_field * self.engine.S_total_x
@@ -131,8 +139,14 @@ class LatticeDSERunner:
         """Build H_K (kinetic) and H_V (potential) separately for λ calculation."""
         bonds = self.geometry.bonds
         
+        # Safety check
+        if not bonds and self.model != 'kitaev':
+            raise ValueError(f"No bonds found! Lattice {self.lx}x{self.ly} requires at least 2 sites.")
+        
         if self.model == 'heisenberg':
             H_K, H_V = self.engine.build_heisenberg(bonds, J=self.j, split_KV=True)
+            if H_K is None or H_V is None:
+                raise ValueError("Failed to build Heisenberg H_K/H_V")
             # Add field to H_V
             if abs(h_field) > 1e-10:
                 H_V = H_V + h_field * self.engine.S_total_x
@@ -140,16 +154,22 @@ class LatticeDSERunner:
             
         elif self.model == 'xy':
             H_K = self.engine.build_xy(bonds, J=self.j)
+            if H_K is None:
+                raise ValueError("Failed to build XY Hamiltonian")
             H_V = h_field * self.engine.S_total_x if abs(h_field) > 1e-10 else \
                   self.engine.sparse.csr_matrix((self.dim, self.dim), dtype=np.complex128)
             return H_K, H_V
             
         elif self.model == 'ising':
             H_K, H_V = self.engine.build_ising(bonds, J=self.j, h=h_field, split_KV=True)
+            if H_K is None or H_V is None:
+                raise ValueError("Failed to build Ising H_K/H_V")
             return H_K, H_V
             
         elif self.model == 'kitaev':
             H = self.engine.build_kitaev(self.lx, self.ly)
+            if H is None:
+                raise ValueError("Failed to build Kitaev Hamiltonian")
             H_V = h_field * self.engine.S_total_x if abs(h_field) > 1e-10 else \
                   self.engine.sparse.csr_matrix((self.dim, self.dim), dtype=np.complex128)
             return H, H_V
@@ -173,7 +193,12 @@ class LatticeDSERunner:
         
         try:
             from memory_dft.solvers import lanczos_expm_multiply
-            return lanczos_expm_multiply(H, psi, dt, krylov_dim=20)
+            # lanczos_expm_multiply now auto-detects backend
+            result = lanczos_expm_multiply(H, psi, dt, krylov_dim=20)
+            # Ensure output is on correct backend
+            if self.engine.use_gpu and isinstance(result, np.ndarray):
+                return xp.asarray(result)
+            return result
         except ImportError:
             # Fallback to dense expm
             from scipy.linalg import expm
