@@ -8,7 +8,7 @@ Modules:
   - lambda3_bridge: Stability diagnostics and validation
   - vorticity: Correlation decomposition and analysis
   - thermodynamics: Finite-temperature utilities
-  - rdm: Two-particle reduced density matrix (NEW)
+  - rdm: Two-particle reduced density matrix
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
@@ -30,7 +30,7 @@ from .vorticity import (
     MemoryKernelFromGamma
 )
 
-# Thermodynamics (NEW - from thermal_dse.py)
+# Thermodynamics
 from .thermodynamics import (
     # Constants
     K_B_EV,
@@ -56,9 +56,12 @@ from .thermodynamics import (
     # Thermal states
     thermal_density_matrix,
     sample_thermal_state,
+    # Temperature-dependent Hamiltonian H(T)
+    TemperatureDependentHamiltonian,
+    ThermalPathEvolver,
 )
 
-# Two-Particle Reduced Density Matrix (NEW)
+# Two-Particle Reduced Density Matrix
 from .rdm import (
     # Result container
     RDM2Result,
@@ -120,7 +123,11 @@ __all__ = [
     'thermal_density_matrix',
     'sample_thermal_state',
     
-    # 2-RDM (NEW)
+    # Thermodynamics - H(T)
+    'TemperatureDependentHamiltonian',
+    'ThermalPathEvolver',
+    
+    # 2-RDM
     'RDM2Result',
     'compute_2rdm',
     'compute_2rdm_with_ops',
