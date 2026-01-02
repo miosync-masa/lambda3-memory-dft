@@ -77,6 +77,8 @@ from .sparse_engine_unified import (
     SparseHamiltonianEngine,  # = SparseEngine
     HubbardResult,            # = ComputeResult
     SpinOperatorsCompat,      # SpinOperators-like interface
+    HubbardEngineCompat,      # HubbardEngine-like interface
+    HubbardEngine,            # = HubbardEngineCompat
 )
 
 # =========================================================================
@@ -227,6 +229,7 @@ __all__ = [
     # Backward compatibility (Sparse Engine)
     'SparseHamiltonianEngine',
     'HubbardEngine',
+    'HubbardEngineCompat',
     'HubbardResult',
     
     # Lattice Geometry
