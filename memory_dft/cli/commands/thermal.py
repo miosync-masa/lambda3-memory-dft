@@ -44,6 +44,8 @@ class ThermalDSERunner:
     2. Boltzmann weights for thermal averaging
     3. Time evolution along temperature paths
     4. λ(T) = K(T)/|V(T)| stability parameter
+    
+    GPU unified: All matrix operations on GPU when available.
     """
     
     def __init__(self, n_sites: int = 4, t_hop: float = 1.0, U_int: float = 2.0,
@@ -71,6 +73,9 @@ class ThermalDSERunner:
         self.engine = self.SparseEngine(n_sites, use_gpu=use_gpu, verbose=False)
         self.geometry = self.engine.build_chain(periodic=False)
         
+        # xp = cupy or numpy
+        self.xp = self.engine.xp
+        
         # Build Hubbard Hamiltonian
         self._build_hubbard()
         self._diagonalize()
@@ -82,41 +87,53 @@ class ThermalDSERunner:
     def _build_hubbard(self):
         """Build Hubbard Hamiltonian H = H_K + H_V using engine."""
         bonds = self.geometry.bonds
-        H_K_gpu, H_V_gpu = self.engine.build_hubbard(
+        # H_K, H_V stay on GPU if use_gpu=True
+        self.H_K, self.H_V = self.engine.build_hubbard(
             bonds, t=self.t_hop, U=self.U_int, split_KV=True
         )
-        
-        # Convert to CPU (SciPy sparse) for consistent operations
-        if self.engine.use_gpu:
-            self.H_K = H_K_gpu.get()
-            self.H_V = H_V_gpu.get()
-            self.H = (H_K_gpu + H_V_gpu).get()
-        else:
-            self.H_K = H_K_gpu
-            self.H_V = H_V_gpu
-            self.H = H_K_gpu + H_V_gpu
+        self.H = self.H_K + self.H_V
         
         if self.verbose:
             print(f"  Built Hubbard: {self.n_sites} sites, t={self.t_hop}, U={self.U_int}")
     
     def _diagonalize(self):
         """Compute low-energy eigenstates."""
-        from scipy.sparse.linalg import eigsh
+        xp = self.xp
         
         try:
-            eigenvalues, eigenvectors = eigsh(
+            eigenvalues, eigenvectors = self.engine.eigsh(
                 self.H, k=self.n_eigenstates, which='SA'
             )
+            # eigenvalues → CPU (for Boltzmann weights with np.exp)
+            # eigenvectors → GPU (for matrix operations)
+            if self.engine.use_gpu:
+                self.eigenvalues = eigenvalues.get()
+                self.eigenvectors = eigenvectors  # stays on GPU!
+            else:
+                self.eigenvalues = eigenvalues
+                self.eigenvectors = eigenvectors
         except Exception:
             # Fallback to dense
-            H_dense = self.H.toarray()
+            if self.engine.use_gpu:
+                H_dense = self.H.toarray().get()
+            else:
+                H_dense = self.H.toarray()
             eigenvalues, eigenvectors = np.linalg.eigh(H_dense)
-            eigenvalues = eigenvalues[:self.n_eigenstates]
+            self.eigenvalues = eigenvalues[:self.n_eigenstates]
             eigenvectors = eigenvectors[:, :self.n_eigenstates]
+            # Convert eigenvectors to GPU if needed
+            if self.engine.use_gpu:
+                self.eigenvectors = xp.asarray(eigenvectors)
+            else:
+                self.eigenvectors = eigenvectors
         
-        idx = np.argsort(eigenvalues)
-        self.eigenvalues = eigenvalues[idx]
-        self.eigenvectors = eigenvectors[:, idx]
+        # Sort by energy
+        idx = np.argsort(self.eigenvalues)
+        self.eigenvalues = self.eigenvalues[idx]
+        if self.engine.use_gpu:
+            self.eigenvectors = self.eigenvectors[:, xp.asarray(idx)]
+        else:
+            self.eigenvectors = self.eigenvectors[:, idx]
         
         if self.verbose:
             gap = self.eigenvalues[1] - self.eigenvalues[0] if len(self.eigenvalues) > 1 else 0
@@ -130,7 +147,7 @@ class ThermalDSERunner:
         return self.energy_scale / (self.K_B_EV * T_kelvin)
     
     def boltzmann_weights(self, beta: float) -> np.ndarray:
-        """Compute Boltzmann weights exp(-βE_n)/Z."""
+        """Compute Boltzmann weights exp(-βE_n)/Z (on CPU)."""
         if beta == float('inf'):
             weights = np.zeros(len(self.eigenvalues))
             weights[0] = 1.0
@@ -146,6 +163,7 @@ class ThermalDSERunner:
         """
         Compute stability parameter λ(T) = K(T)/|V(T)|.
         """
+        xp = self.xp
         beta = self.T_to_beta(T_kelvin)
         weights = self.boltzmann_weights(beta)
         
@@ -156,9 +174,9 @@ class ThermalDSERunner:
             psi = self.eigenvectors[:, n]
             w = weights[n]
             
-            # All on CPU now
-            K_n = float(np.real(np.vdot(psi, self.H_K @ psi)))
-            V_n = float(np.real(np.vdot(psi, self.H_V @ psi)))
+            # GPU unified operations
+            K_n = float(xp.real(xp.vdot(psi, self.H_K @ psi)))
+            V_n = float(xp.real(xp.vdot(psi, self.H_V @ psi)))
             
             K_total += w * K_n
             V_total += w * V_n
@@ -186,16 +204,25 @@ class ThermalDSERunner:
         weights = self.boltzmann_weights(beta)
         return int(np.sum(weights > threshold))
     
-    def time_evolve(self, psi: np.ndarray, dt: float) -> np.ndarray:
+    def time_evolve(self, psi, dt: float):
         """Time evolution: |ψ(t+dt)⟩ = exp(-iHdt)|ψ(t)⟩."""
+        xp = self.xp
+        
         try:
             from memory_dft.solvers import lanczos_expm_multiply
             return lanczos_expm_multiply(self.H, psi, dt, krylov_dim=20)
         except ImportError:
             from scipy.linalg import expm
-            H_dense = self.H.toarray()
-            U = expm(-1j * H_dense * dt)
-            return U @ psi
+            if self.engine.use_gpu:
+                H_dense = self.H.toarray().get()
+                psi_np = psi.get() if hasattr(psi, 'get') else psi
+                U = expm(-1j * H_dense * dt)
+                result = U @ psi_np
+                return xp.asarray(result)
+            else:
+                H_dense = self.H.toarray()
+                U = expm(-1j * H_dense * dt)
+                return U @ psi
     
     def evolve_path(self, temperatures: List[float], 
                     dt: float = 0.1, steps_per_T: int = 10) -> Dict[str, Any]:
@@ -206,6 +233,8 @@ class ThermalDSERunner:
         - Each eigenstate |ψ_n⟩ evolves under H(t)
         - λ(T) accumulates history through evolution
         """
+        xp = self.xp
+        
         # Initialize with thermal state at first temperature
         T0 = temperatures[0]
         beta0 = self.T_to_beta(T0)
@@ -215,7 +244,7 @@ class ThermalDSERunner:
         active_mask = weights > 1e-10
         active_indices = np.where(active_mask)[0]
         
-        # Copy eigenstates for evolution (all NumPy now)
+        # Copy eigenstates for evolution (stays on GPU)
         evolved_psis = [self.eigenvectors[:, i].copy() for i in active_indices]
         evolved_weights = [weights[i] for i in active_indices]
         
@@ -233,9 +262,9 @@ class ThermalDSERunner:
                 
                 for i, psi in enumerate(evolved_psis):
                     w = evolved_weights[i]
-                    # All on CPU - no GPU/CPU mixing
-                    K = float(np.real(np.vdot(psi, self.H_K @ psi)))
-                    V = float(np.real(np.vdot(psi, self.H_V @ psi)))
+                    # GPU unified operations
+                    K = float(xp.real(xp.vdot(psi, self.H_K @ psi)))
+                    V = float(xp.real(xp.vdot(psi, self.H_V @ psi)))
                     K_total += w * K
                     V_total += w * V
                 
@@ -246,10 +275,10 @@ class ThermalDSERunner:
                 lambdas.append(lam)
                 entropies.append(S)
                 
-                # Time evolution
+                # Time evolution (GPU unified)
                 for i in range(len(evolved_psis)):
                     evolved_psis[i] = self.time_evolve(evolved_psis[i], dt)
-                    evolved_psis[i] = evolved_psis[i] / np.linalg.norm(evolved_psis[i])
+                    evolved_psis[i] = evolved_psis[i] / xp.linalg.norm(evolved_psis[i])
                 
                 t += dt
         
