@@ -4,6 +4,8 @@ H2 Molecule Memory-DFT Test
 
 簡単なH2分子モデルでMemory-DFTの動作検証
 
+v0.5.0: Updated imports for unified SparseEngine
+
 Tests:
   1-5: Hubbard model based tests (educational/validation)
   6: γ distance decomposition (Non-Markovian QSOT)
@@ -14,28 +16,14 @@ Author: Masamichi Iizumi, Tamaki Iizumi
 
 import numpy as np
 
-# パッケージインポート（pip install後 or sys.path設定後）
-try:
-    from memory_dft.core.sparse_engine import SparseHamiltonianEngine
-    from memory_dft.core.memory_kernel import CompositeMemoryKernel, KernelWeights
-    from memory_dft.core.history_manager import HistoryManager
-    from memory_dft.solvers.lanczos_memory import MemoryLanczosSolver
-    from memory_dft.solvers.time_evolution import TimeEvolutionEngine, EvolutionConfig
-    from memory_dft.physics.lambda3_bridge import Lambda3Calculator, HCSPValidator
-    from memory_dft.physics.vorticity import GammaExtractor, VorticityCalculator
-except ImportError:
-    # 開発時のフォールバック
-    import sys
-    import os
-    # このファイルの親ディレクトリをパスに追加
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from core.sparse_engine import SparseHamiltonianEngine
-    from core.memory_kernel import CompositeMemoryKernel, KernelWeights
-    from core.history_manager import HistoryManager
-    from solvers.lanczos_memory import MemoryLanczosSolver
-    from solvers.time_evolution import TimeEvolutionEngine, EvolutionConfig
-    from physics.lambda3_bridge import Lambda3Calculator, HCSPValidator
-    from physics.vorticity import GammaExtractor, VorticityCalculator
+# v0.5.0: Package-based imports
+from memory_dft.core.sparse_engine_unified import SparseEngine, SparseHamiltonianEngine
+from memory_dft.core.memory_kernel import CompositeMemoryKernel, KernelWeights
+from memory_dft.core.history_manager import HistoryManager
+from memory_dft.solvers.lanczos_memory import MemoryLanczosSolver
+from memory_dft.solvers.time_evolution import TimeEvolutionEngine, EvolutionConfig
+from memory_dft.physics.lambda3_bridge import Lambda3Calculator, HCSPValidator
+from memory_dft.physics.vorticity import GammaExtractor, VorticityCalculator
 
 
 def create_h2_model(bond_length: float = 1.4):
@@ -52,12 +40,12 @@ def create_h2_model(bond_length: float = 1.4):
     Delta = 0.5  # Ising異方性
     h = 0.1  # 磁場（対称性破れ用）
     
-    # 2サイト系
-    engine = SparseHamiltonianEngine(n_sites=2, use_gpu=False, verbose=False)
+    # 2サイト系 (v0.5.0: use SparseEngine)
+    engine = SparseEngine(n_sites=2, use_gpu=False, verbose=False)
     
     # Heisenbergハミルトニアン
     bonds = [(0, 1)]
-    H_K, H_V = engine.build_heisenberg_hamiltonian(bonds, J=J, Jz=J*Delta)
+    H_K, H_V = engine.build_heisenberg(bonds, J=J, Jz=J*Delta)
     
     # 磁場項をポテンシャルに追加
     Sz_total = engine.get_site_operator('Z', 0) + engine.get_site_operator('Z', 1)
@@ -205,9 +193,9 @@ def test_gamma_scaling():
     
     # 異なるサイズでシミュレーション
     for n_sites in [2, 4, 6]:
-        engine = SparseHamiltonianEngine(n_sites=n_sites, use_gpu=False, verbose=False)
-        geom = engine.build_chain_geometry(L=n_sites)
-        H_K, H_V = engine.build_heisenberg_hamiltonian(geom.bonds)
+        engine = SparseEngine(n_sites=n_sites, use_gpu=False, verbose=False)
+        geom = engine.build_chain(L=n_sites)
+        H_K, H_V = engine.build_heisenberg(geom.bonds)
         
         # ランダム状態
         psi = np.random.randn(engine.dim) + 1j * np.random.randn(engine.dim)
@@ -672,12 +660,12 @@ def run_all_tests():
     
     try:
         test_basic_evolution()
-        test_memory_vs_memoryless()  # Renamed from test_memory_vs_standard
+        test_memory_vs_memoryless()
         test_hcsp_axioms()
         test_gamma_scaling()
         test_memory_kernel_decomposition()
         test_gamma_distance_decomposition()
-        test_real_dft_vs_dse()  # NEW: Real DFT comparison!
+        test_real_dft_vs_dse()
         
         print("\n" + "="*70)
         print("🎉 All tests completed!")
