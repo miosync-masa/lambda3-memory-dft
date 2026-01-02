@@ -82,10 +82,10 @@ from .sparse_engine_unified import (
 )
 
 # =========================================================================
-# Lattice Geometry
+# Lattice Geometry (now in sparse_engine_unified)
 # =========================================================================
 
-from .lattice import (
+from .sparse_engine_unified import (
     LatticeGeometry2D,
     LatticeGeometry,
     create_chain,
