@@ -14,8 +14,6 @@ Core insight (Appendix G):
 DFT: History-blind → ΔΛ = 0 (by construction)
 DSE: History-aware → ΔΛ ≠ 0 (quantum memory)
 
-This is fundamentally different from DFT with temperature smearing!
-
 Usage:
     memory-dft thermal --T-high 300 --T-low 50 --T-final 150
 
@@ -46,11 +44,6 @@ class ThermalDSERunner:
     2. Boltzmann weights for thermal averaging
     3. Time evolution along temperature paths
     4. λ(T) = K(T)/|V(T)| stability parameter
-    
-    Benefits from SparseEngine:
-    - Automatic GPU/CPU backend
-    - Unified operator construction
-    - Consistent λ calculation
     """
     
     def __init__(self, n_sites: int = 4, t_hop: float = 1.0, U_int: float = 2.0,
@@ -89,31 +82,34 @@ class ThermalDSERunner:
     def _build_hubbard(self):
         """Build Hubbard Hamiltonian H = H_K + H_V using engine."""
         bonds = self.geometry.bonds
-        self.H_K, self.H_V = self.engine.build_hubbard(
+        H_K_gpu, H_V_gpu = self.engine.build_hubbard(
             bonds, t=self.t_hop, U=self.U_int, split_KV=True
         )
-        self.H = self.H_K + self.H_V
+        
+        # Convert to CPU (SciPy sparse) for consistent operations
+        if self.engine.use_gpu:
+            self.H_K = H_K_gpu.get()
+            self.H_V = H_V_gpu.get()
+            self.H = (H_K_gpu + H_V_gpu).get()
+        else:
+            self.H_K = H_K_gpu
+            self.H_V = H_V_gpu
+            self.H = H_K_gpu + H_V_gpu
         
         if self.verbose:
             print(f"  Built Hubbard: {self.n_sites} sites, t={self.t_hop}, U={self.U_int}")
     
     def _diagonalize(self):
         """Compute low-energy eigenstates."""
-        xp = self.engine.xp
+        from scipy.sparse.linalg import eigsh
         
         try:
-            eigenvalues, eigenvectors = self.engine.eigsh(
+            eigenvalues, eigenvectors = eigsh(
                 self.H, k=self.n_eigenstates, which='SA'
             )
-            if self.engine.use_gpu:
-                eigenvalues = eigenvalues.get()
-                eigenvectors = eigenvectors.get()
         except Exception:
             # Fallback to dense
-            if self.engine.use_gpu:
-                H_dense = self.H.toarray().get()
-            else:
-                H_dense = self.H.toarray()
+            H_dense = self.H.toarray()
             eigenvalues, eigenvectors = np.linalg.eigh(H_dense)
             eigenvalues = eigenvalues[:self.n_eigenstates]
             eigenvectors = eigenvectors[:, :self.n_eigenstates]
@@ -149,8 +145,6 @@ class ThermalDSERunner:
     def compute_thermal_lambda(self, T_kelvin: float) -> float:
         """
         Compute stability parameter λ(T) = K(T)/|V(T)|.
-        
-        This is the thermal expectation value using Boltzmann weights.
         """
         beta = self.T_to_beta(T_kelvin)
         weights = self.boltzmann_weights(beta)
@@ -162,6 +156,7 @@ class ThermalDSERunner:
             psi = self.eigenvectors[:, n]
             w = weights[n]
             
+            # All on CPU now
             K_n = float(np.real(np.vdot(psi, self.H_K @ psi)))
             V_n = float(np.real(np.vdot(psi, self.H_V @ psi)))
             
@@ -198,14 +193,9 @@ class ThermalDSERunner:
             return lanczos_expm_multiply(self.H, psi, dt, krylov_dim=20)
         except ImportError:
             from scipy.linalg import expm
-            if self.engine.use_gpu:
-                H_dense = self.H.toarray().get()
-                psi_np = psi.get() if hasattr(psi, 'get') else psi
-            else:
-                H_dense = self.H.toarray()
-                psi_np = psi
+            H_dense = self.H.toarray()
             U = expm(-1j * H_dense * dt)
-            return U @ psi_np
+            return U @ psi
     
     def evolve_path(self, temperatures: List[float], 
                     dt: float = 0.1, steps_per_T: int = 10) -> Dict[str, Any]:
@@ -215,14 +205,6 @@ class ThermalDSERunner:
         This is the KEY difference from DFT:
         - Each eigenstate |ψ_n⟩ evolves under H(t)
         - λ(T) accumulates history through evolution
-        
-        Args:
-            temperatures: Temperature sequence [T1, T2, ...]
-            dt: Time step
-            steps_per_T: Steps at each temperature
-            
-        Returns:
-            Dictionary with evolution results
         """
         # Initialize with thermal state at first temperature
         T0 = temperatures[0]
@@ -233,7 +215,7 @@ class ThermalDSERunner:
         active_mask = weights > 1e-10
         active_indices = np.where(active_mask)[0]
         
-        # Copy eigenstates for evolution
+        # Copy eigenstates for evolution (all NumPy now)
         evolved_psis = [self.eigenvectors[:, i].copy() for i in active_indices]
         evolved_weights = [weights[i] for i in active_indices]
         
@@ -251,6 +233,7 @@ class ThermalDSERunner:
                 
                 for i, psi in enumerate(evolved_psis):
                     w = evolved_weights[i]
+                    # All on CPU - no GPU/CPU mixing
                     K = float(np.real(np.vdot(psi, self.H_K @ psi)))
                     V = float(np.real(np.vdot(psi, self.H_V @ psi)))
                     K_total += w * K
@@ -287,9 +270,6 @@ class ThermalDSERunner:
         
         Path 1: T_low → T_high → T_final (heat then cool)
         Path 2: T_high → T_low → T_final (cool then heat)
-        
-        Returns:
-            Dictionary with comparison results including ΔΛ
         """
         # Build temperature sequences
         path1_temps = (
