@@ -5,6 +5,8 @@ Chemical Memory Tests (A/B/C/D)
 Tests demonstrating path-dependent and history-dependent effects
 in quantum systems that standard DFT cannot capture.
 
+v0.5.0: Now uses unified SparseEngine (via HubbardEngine compatibility layer)
+
 Test Summary:
   A: Path dependence (same final H, different field paths)
   B: Multi-site scaling (memory contribution vs system size)
@@ -31,7 +33,8 @@ _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
-from core.hubbard_engine import HubbardEngine, HubbardResult
+# v0.5.0: Use unified engine
+from core.sparse_engine_unified import HubbardEngine, HubbardResult
 from core.memory_kernel import (
     SimpleMemoryKernel,
     CatalystMemoryKernel,
@@ -56,7 +59,7 @@ def test_A_path_dependence():
     print("="*60)
     
     L = 4
-    engine = HubbardEngine(L)
+    engine = HubbardEngine(L, verbose=False)
     result_init = engine.compute_full(t=1.0, U=2.0, h=0.0)
     psi_init = result_init.psi
     
@@ -128,7 +131,7 @@ def test_B_multisite():
     results = []
     
     for L in [3, 4, 5, 6]:
-        engine = HubbardEngine(L)
+        engine = HubbardEngine(L, verbose=False)
         memory = SimpleMemoryKernel(eta=0.3, tau=5.0, gamma=0.5)
         
         result_init = engine.compute_full(t=1.0, U=2.0)
@@ -171,7 +174,7 @@ def test_C_reaction_coordinate():
     print("="*60)
     
     L = 4
-    engine = HubbardEngine(L)
+    engine = HubbardEngine(L, verbose=False)
     
     R_eq = 1.0
     R_max = 1.3
@@ -257,7 +260,7 @@ def test_D_catalyst_history():
     print("="*60)
     
     L = 4
-    engine = HubbardEngine(L)
+    engine = HubbardEngine(L, verbose=False)
     result_init = engine.compute_full(t=1.0, U=2.0)
     psi_init = result_init.psi
     
@@ -338,7 +341,7 @@ def test_D_catalyst_history():
 def run_all_chemical_tests():
     """Run all chemical memory tests."""
     print("="*60)
-    print("Chemical Memory-DFT Tests")
+    print("Chemical Memory-DFT Tests (v0.5.0 - Unified SparseEngine)")
     print("="*60)
     print("\nValidating history-dependent effects in quantum systems")
     
