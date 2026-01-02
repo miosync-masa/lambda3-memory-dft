@@ -89,11 +89,13 @@ from .core.memory_kernel import (
     SimpleMemoryKernel
 )
 
-# Repulsive Kernel
-from .core.repulsive_kernel import (
+# Repulsive Kernel (DEPRECATED in v0.5.0 - use ExclusionKernel instead)
+# Import from core where dummy classes are defined
+from .core import (
     RepulsiveMemoryKernel,
     CompressionEvent,
-    ExtendedCompositeKernel
+    ExtendedCompositeKernel,
+    HAS_REPULSIVE_KERNEL,
 )
 
 # History Manager
