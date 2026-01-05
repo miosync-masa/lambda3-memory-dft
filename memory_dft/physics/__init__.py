@@ -9,6 +9,7 @@ Modules:
   - vorticity: Correlation decomposition and analysis
   - thermodynamics: Finite-temperature utilities
   - rdm: Two-particle reduced density matrix
+  - topology: Topological invariants and reconnection detection
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
@@ -37,25 +38,31 @@ from .thermodynamics import (
     K_B_J,
     H_EV,
     HBAR_EV,
+    
     # Temperature conversion
     T_to_beta,
     beta_to_T,
     thermal_energy,
+    
     # Boltzmann statistics
     boltzmann_weights,
     partition_function,
+    
     # Thermal expectation values
     thermal_expectation,
     thermal_expectation_zero_T,
     thermal_average_energy,
     thermal_energy_variance,
+    
     # Thermodynamic quantities
     compute_entropy,
     compute_free_energy,
     compute_heat_capacity,
+    
     # Thermal states
     thermal_density_matrix,
     sample_thermal_state,
+    
     # Temperature-dependent Hamiltonian H(T)
     TemperatureDependentHamiltonian,
     ThermalPathEvolver,
@@ -65,17 +72,42 @@ from .thermodynamics import (
 from .rdm import (
     # Result container
     RDM2Result,
+    
     # Core computation
     compute_2rdm,
     compute_2rdm_with_ops,
+    
     # Correlation analysis
     compute_density_density_correlation,
     compute_connected_correlation,
     compute_correlation_matrix,
     filter_by_distance,
+    
     # External interface
     from_pyscf_rdm2,
     to_pyscf_rdm2,
+)
+
+# Topology (NEW!)
+from .topology import (
+    # Result containers
+    TopologyResult,
+    ReconnectionEvent,
+    
+    # Spin topology
+    SpinTopologyCalculator,
+    
+    # Berry phase
+    BerryPhaseCalculator,
+    
+    # Zak phase (1D)
+    ZakPhaseCalculator,
+    
+    # Reconnection detection
+    ReconnectionDetector,
+    
+    # Unified engine
+    TopologyEngine,
 )
 
 
@@ -137,4 +169,13 @@ __all__ = [
     'filter_by_distance',
     'from_pyscf_rdm2',
     'to_pyscf_rdm2',
+    
+    # Topology (NEW!)
+    'TopologyResult',
+    'ReconnectionEvent',
+    'SpinTopologyCalculator',
+    'BerryPhaseCalculator',
+    'ZakPhaseCalculator',
+    'ReconnectionDetector',
+    'TopologyEngine',
 ]
