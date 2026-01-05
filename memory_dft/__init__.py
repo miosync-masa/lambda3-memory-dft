@@ -50,12 +50,14 @@ Structure (Refactored):
   │   ├── time_evolution.py     # Time evolution
   │   ├── memory_indicators.py  # Memory quantification
   │   └── chemical_reaction.py  # Surface chemistry solver
+  ├── holographic/  
+  │   └── dual.py               # AdS/CFT Engine
   ├── physics/
   │   ├── lambda3_bridge.py     # Stability diagnostics
   │   ├── vorticity.py          # γ decomposition
   │   ├── thermodynamics.py     # Thermal utilities
   │   ├── rdm.py                # 2-RDM analysis
-  │   └── topology.py            # TopologyEngine 
+  │   └── topology.py           # Topology Engine 
   ├── interfaces/               # External package interfaces
   │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
   └── visualization/
@@ -337,9 +339,17 @@ from .physics.topology import (
 )
 
 # =============================================================================
-# Interfaces (optional - requires PySCF)
+# holographic
 # =============================================================================
 
+from .holographic.dual import (
+    HolographicDual,
+    quick_holographic_analysis,
+)
+
+# =============================================================================
+# Interfaces (optional - requires PySCF)
+# =============================================================================
 try:
     from .interfaces import (
         DSECalculator,
