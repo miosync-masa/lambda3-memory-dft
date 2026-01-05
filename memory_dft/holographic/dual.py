@@ -17,6 +17,10 @@ Date: 2025-01-06
 
 import numpy as np
 from typing import List, Optional, Tuple, Dict, Any
+
+# CI環境対応: ヘッドレスバックエンド
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
