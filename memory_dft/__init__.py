@@ -54,7 +54,8 @@ Structure (Refactored):
   │   ├── lambda3_bridge.py     # Stability diagnostics
   │   ├── vorticity.py          # γ decomposition
   │   ├── thermodynamics.py     # Thermal utilities
-  │   └── rdm.py                # 2-RDM analysis
+  │   ├── rdm.py                # 2-RDM analysis
+  │   └── topology.py            # TopologyEngine 
   ├── interfaces/               # External package interfaces
   │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
   └── visualization/
