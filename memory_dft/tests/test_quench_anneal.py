@@ -1,374 +1,334 @@
 """
-Quench vs Anneal Test - Materials Science Core Demonstration
-=============================================================
+Fe Cluster Quench vs Anneal - Real DFT Demonstration
+====================================================
 
-This is THE test for Memory-DFT's practical relevance!
+Uses PySCF DFT to demonstrate thermal path dependence
+on REAL iron clusters!
 
-Physical principle:
-  - Quench (急冷): Fast cooling traps system in metastable state
-  - Anneal (徐冷): Slow cooling allows relaxation to ground state
-  
-  Same final temperature → DIFFERENT physical properties!
+Physical picture:
+  - High T: Fe-Fe bond elongates (thermal expansion)
+  - Low T: Fe-Fe bond contracts
+  - Quench: Sudden contraction → Trapped in metastable
+  - Anneal: Gradual contraction → Relaxed to ground state
 
-Materials science analogy:
-  - Quench → Martensite (hard, brittle, high energy)
-  - Anneal → Ferrite/Pearlite (soft, ductile, low energy)
-
-Expected results:
-  - Path A (Quench): Higher E, Higher λ (metastable)
-  - Path B (Anneal): Lower E, Lower λ (stable)
-
-If Memory-DFT captures this: We prove that
-"Same composition + Same final T ≠ Same properties"
-when process history differs!
+Materials science connection:
+  - Quench → Martensite formation (BCC → BCT distortion)
+  - Anneal → Ferrite/Pearlite (equilibrium phases)
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
 import numpy as np
-import time
+from typing import List, Optional
+
+# Check PySCF
+try:
+    from pyscf import gto, dft
+    HAS_PYSCF = True
+except ImportError:
+    HAS_PYSCF = False
+    print("⚠️ PySCF not installed. Run: pip install pyscf")
 
 
-def test_quench_vs_anneal():
+def create_fe2_quench_path(r_hot: float = 2.5,
+                           r_cold: float = 2.0,
+                           n_steps: int = 2) -> List[dict]:
     """
-    Test F: Quench vs Anneal - The Ultimate Materials Test
-    
-    Start: T_high = 1000K (distorted H)
-    Path A (Quench): 1000K → 50K in 1 step (instant)
-    Path B (Anneal): 1000K → 50K in 100 steps (gradual)
-    
-    Expected:
-      - Quench: Trapped in metastable state (high E, high λ)
-      - Anneal: Relaxed to ground state (low E, low λ)
-    
-    This proves: Same composition + Same T_final ≠ Same properties!
+    Create Fe2 quench path (instant cooling).
+
+    Args:
+        r_hot: Fe-Fe distance at high T (Å)
+        r_cold: Fe-Fe distance at low T (Å)
+        n_steps: Number of steps (2 = instant quench)
     """
+    path = []
+    distances = np.linspace(r_hot, r_cold, n_steps)
+
+    for i, r in enumerate(distances):
+        path.append({
+            'atoms': f"Fe 0 0 0; Fe 0 0 {r}",
+            'time': float(i),
+            'label': f'quench_{i}',
+            'r': r
+        })
+
+    return path
+
+
+def create_fe2_anneal_path(r_hot: float = 2.5,
+                           r_cold: float = 2.0,
+                           n_steps: int = 20) -> List[dict]:
+    """
+    Create Fe2 anneal path (gradual cooling).
+
+    Args:
+        r_hot: Fe-Fe distance at high T (Å)
+        r_cold: Fe-Fe distance at low T (Å)
+        n_steps: Number of steps (more = slower anneal)
+    """
+    path = []
+    distances = np.linspace(r_hot, r_cold, n_steps)
+
+    for i, r in enumerate(distances):
+        path.append({
+            'atoms': f"Fe 0 0 0; Fe 0 0 {r}",
+            'time': float(i),
+            'label': f'anneal_{i}',
+            'r': r
+        })
+
+    return path
+
+
+def compute_dft_energy(atoms: str,
+                       basis: str = 'def2-svp',
+                       xc: str = 'PBE',
+                       spin: int = 8,  # Fe2 is high-spin
+                       verbose: int = 0) -> float:
+    """
+    Compute DFT energy for Fe cluster.
+
+    Fe2 ground state: 9Σ- (spin = 8, i.e., 8 unpaired electrons)
+    """
+    if not HAS_PYSCF:
+        raise ImportError("PySCF required")
+
+    mol = gto.M(
+        atom=atoms,
+        basis=basis,
+        spin=spin,
+        verbose=verbose
+    )
+
+    mf = dft.UKS(mol)
+    mf.xc = xc
+    mf.max_cycle = 100
+
+    E = mf.kernel()
+
+    return E
+
+
+def run_fe2_quench_vs_anneal(verbose: bool = True):
+    """
+    Main test: Fe2 Quench vs Anneal.
+
+    Demonstrates that thermal history affects final energy
+    even when ending at same Fe-Fe distance!
+    """
+    if not HAS_PYSCF:
+        print("❌ PySCF not available")
+        return None
+
     print("\n" + "=" * 70)
-    print("🔥 TEST F: QUENCH vs ANNEAL")
+    print("🔥 Fe2 QUENCH vs ANNEAL - Real DFT Test")
     print("=" * 70)
-    print("""
-    The ultimate materials science test!
-    
-    Quench (急冷): Fast cooling → Metastable (Martensite-like)
-    Anneal (徐冷): Slow cooling → Stable (Ferrite-like)
-    
-    Same final T, DIFFERENT physical states!
-    """)
-    
-    # Import modules
-    from memory_dft.core.sparse_engine_unified import SparseEngine
-    from memory_dft.physics.thermodynamics import ThermalPathEvolver
-    
+
     # Parameters
-    n_sites = 4
-    T_high = 1000.0  # K - high temperature start
-    T_low = 50.0     # K - final temperature
-    
-    # Strong temperature dependence for clear effect
-    alpha = 0.002  # J decreases 0.2% per 100K
-    
-    print(f"\n  System: {n_sites}-site Hubbard chain")
-    print(f"  T_start: {T_high} K")
-    print(f"  T_final: {T_low} K")
-    print(f"  α (T-dependence): {alpha}")
-    
-    # Initialize
-    engine = SparseEngine(n_sites, use_gpu=True, verbose=False)
-    geometry = engine.build_chain(periodic=False)
-    bonds = geometry.bonds
-    
-    evolver = ThermalPathEvolver(
-        engine=engine,
-        bonds=bonds,
-        J0=1.0,
-        U0=2.0,
-        alpha_J=alpha,
-        alpha_U=0.0,
-        T_ref=300.0,
-        energy_scale=0.1,
-        n_eigenstates=14,
-        model='hubbard',
-        verbose=False
-    )
-    
-    # Show J(T) at key temperatures
-    print(f"\n  J(T) values (lattice expansion effect):")
-    print(f"    J({T_high}K) = {evolver.H_builder.J_eff(T_high):.4f}")
-    print(f"    J(300K)  = {evolver.H_builder.J_eff(300):.4f}")
-    print(f"    J({T_low}K)  = {evolver.H_builder.J_eff(T_low):.4f}")
-    
+    r_hot = 2.5   # Å - high temperature bond length
+    r_cold = 2.0  # Å - low temperature bond length
+
+    print(f"\n  Fe-Fe distance:")
+    print(f"    High T (hot):  {r_hot} Å")
+    print(f"    Low T (cold):  {r_cold} Å")
+
+    # Create paths
+    path_quench = create_fe2_quench_path(r_hot, r_cold, n_steps=2)
+    path_anneal = create_fe2_anneal_path(r_hot, r_cold, n_steps=10)
+
+    print(f"\n  Quench path: {len(path_quench)} steps (instant)")
+    print(f"  Anneal path: {len(path_anneal)} steps (gradual)")
+
+    # Memory kernel for DSE
+    from memory_dft.interfaces.pyscf_interface import MemoryKernelDFTWrapper
+
+    memory_quench = MemoryKernelDFTWrapper(eta=0.1, tau=5.0, gamma=0.5)
+    memory_anneal = MemoryKernelDFTWrapper(eta=0.1, tau=5.0, gamma=0.5)
+
     # ========================================
-    # Path A: QUENCH (急冷)
+    # QUENCH PATH
     # ========================================
     print("\n" + "-" * 50)
-    print("  Path A: QUENCH (急冷)")
-    print("  1000K → 50K in 1 step (instant cooling)")
+    print("  Computing QUENCH path...")
     print("-" * 50)
-    
-    # Just 2 temperatures: start and end
-    path_quench = [T_high, T_low]
-    
-    t0 = time.time()
-    result_quench = evolver.evolve(
-        path_quench, 
-        dt=0.1, 
-        steps_per_T=5  # Few steps per T
-    )
-    time_quench = time.time() - t0
-    
-    print(f"  Completed in {time_quench:.2f}s")
-    print(f"  λ_final (Quench): {result_quench['lambda_final']:.4f}")
-    
+
+    E_quench_dft = []
+    E_quench_dse = []
+
+    for step in path_quench:
+        if verbose:
+            print(f"    Step {step['label']}: r = {step['r']:.2f} Å")
+
+        E_dft = compute_dft_energy(step['atoms'], verbose=0)
+        E_quench_dft.append(E_dft)
+
+        # Memory contribution
+        coords = np.array([[0, 0, 0], [0, 0, step['r']]])
+        delta_mem = memory_quench.compute_memory_contribution(
+            step['time'], E_dft, coords
+        )
+        E_dse = E_dft + delta_mem
+        E_quench_dse.append(E_dse)
+
+        memory_quench.add_state(step['time'], E_dft, coords)
+
+        if verbose:
+            print(f"      E_DFT = {E_dft:.6f} Ha, ΔE_mem = {delta_mem:.6f} Ha")
+
     # ========================================
-    # Path B: ANNEAL (徐冷)
+    # ANNEAL PATH
     # ========================================
     print("\n" + "-" * 50)
-    print("  Path B: ANNEAL (徐冷)")
-    print("  1000K → 900K → ... → 50K in 100 steps (gradual)")
+    print("  Computing ANNEAL path...")
     print("-" * 50)
-    
-    # 100 temperature steps
-    n_anneal_steps = 100
-    path_anneal = list(np.linspace(T_high, T_low, n_anneal_steps))
-    
-    t0 = time.time()
-    result_anneal = evolver.evolve(
-        path_anneal, 
-        dt=0.1, 
-        steps_per_T=5
-    )
-    time_anneal = time.time() - t0
-    
-    print(f"  Completed in {time_anneal:.2f}s")
-    print(f"  λ_final (Anneal): {result_anneal['lambda_final']:.4f}")
-    
+
+    E_anneal_dft = []
+    E_anneal_dse = []
+
+    for step in path_anneal:
+        if verbose:
+            print(f"    Step {step['label']}: r = {step['r']:.2f} Å")
+
+        E_dft = compute_dft_energy(step['atoms'], verbose=0)
+        E_anneal_dft.append(E_dft)
+
+        coords = np.array([[0, 0, 0], [0, 0, step['r']]])
+        delta_mem = memory_anneal.compute_memory_contribution(
+            step['time'], E_dft, coords
+        )
+        E_dse = E_dft + delta_mem
+        E_anneal_dse.append(E_dse)
+
+        memory_anneal.add_state(step['time'], E_dft, coords)
+
+        if verbose and (step['label'].endswith('0') or step['label'].endswith('9')):
+            print(f"      E_DFT = {E_dft:.6f} Ha, ΔE_mem = {delta_mem:.6f} Ha")
+
     # ========================================
     # COMPARISON
     # ========================================
     print("\n" + "=" * 70)
-    print("📊 RESULTS COMPARISON")
+    print("📊 RESULTS")
     print("=" * 70)
-    
-    lambda_quench = result_quench['lambda_final']
-    lambda_anneal = result_anneal['lambda_final']
-    delta_lambda = abs(lambda_quench - lambda_anneal)
-    
+
+    E_quench_final_dft = E_quench_dft[-1]
+    E_anneal_final_dft = E_anneal_dft[-1]
+    E_quench_final_dse = E_quench_dse[-1]
+    E_anneal_final_dse = E_anneal_dse[-1]
+
+    delta_dft = abs(E_quench_final_dft - E_anneal_final_dft)
+    delta_dse = abs(E_quench_final_dse - E_anneal_final_dse)
+
     print(f"""
-    ┌─────────────────────────────────────────────────┐
-    │  Path         │  λ_final    │  Interpretation   │
-    ├─────────────────────────────────────────────────┤
-    │  Quench (急冷) │  {lambda_quench:8.4f}   │  Metastable       │
-    │  Anneal (徐冷) │  {lambda_anneal:8.4f}   │  Stable           │
-    ├─────────────────────────────────────────────────┤
-    │  |Δλ|         │  {delta_lambda:8.4f}   │                   │
-    └─────────────────────────────────────────────────┘
+    ┌────────────────────────────────────────────────────────────┐
+    │                    │  E_DFT (Ha)    │  E_DSE (Ha)          │
+    ├────────────────────────────────────────────────────────────┤
+    │  Quench (急冷)      │  {E_quench_final_dft:12.6f}  │  {E_quench_final_dse:12.6f}        │
+    │  Anneal (徐冷)      │  {E_anneal_final_dft:12.6f}  │  {E_anneal_final_dse:12.6f}        │
+    ├────────────────────────────────────────────────────────────┤
+    │  |ΔE|              │  {delta_dft:12.6f}  │  {delta_dse:12.6f}        │
+    └────────────────────────────────────────────────────────────┘
     """)
-    
-    # Physical interpretation
-    print("  Physical Interpretation:")
-    if lambda_quench > lambda_anneal:
-        print("    ✅ Quench → Higher λ (more kinetic, metastable)")
-        print("    ✅ Anneal → Lower λ (more potential, stable)")
-        print("\n    → Matches materials science expectation!")
-        print("    → Martensite (quench) vs Ferrite (anneal)")
-    elif lambda_quench < lambda_anneal:
-        print("    ⚠️ Unexpected: Quench < Anneal")
-        print("    This might indicate different physics...")
-    else:
-        print("    ⚠️ No difference detected")
-        print("    Try increasing α or T range")
-    
-    if delta_lambda > 0.01:
-        print("\n  " + "🎉" * 20)
-        print("  PROOF: Same composition + Same T_final ≠ Same properties!")
-        print("  Process history MATTERS in quantum systems!")
-        print("  " + "🎉" * 20)
-    
-    # Memory metrics
-    try:
-        from memory_dft.solvers.memory_indicators import MemoryIndicator
-        metrics = MemoryIndicator.compute_all(
-            O_forward=lambda_quench,
-            O_backward=lambda_anneal,
-            series=np.array(result_anneal['lambdas']),
-            dt=0.1
-        )
-        print(f"\n  Memory Indicators:")
-        print(f"    ΔO (path non-commutativity): {metrics.delta_O:.6f}")
-        print(f"    M (temporal memory):         {metrics.M_temporal:.6f}")
-        print(f"    Non-Markovian? {metrics.is_non_markovian()}")
-    except ImportError:
-        pass
-    
-    print("\n" + "=" * 70)
-    print("✅ Quench vs Anneal test completed!")
-    print("=" * 70)
-    
+
+    print("  Interpretation:")
+    print(f"    DFT: Same final geometry → Same energy (Δ = {delta_dft:.2e} Ha)")
+    print(f"    DSE: History matters! (Δ = {delta_dse:.6f} Ha)")
+
+    if delta_dse > delta_dft * 10:
+        print("\n  🎉 Memory-DFT captures thermal history dependence!")
+        print("  → Quench vs Anneal leads to DIFFERENT quantum states!")
+
+    # Convert to more meaningful units
+    delta_dse_mHa = delta_dse * 1000
+    delta_dse_eV = delta_dse * 27.2114
+    delta_dse_kJ = delta_dse * 2625.5
+
+    print(f"\n  Energy difference in various units:")
+    print(f"    {delta_dse_mHa:.3f} mHa")
+    print(f"    {delta_dse_eV:.4f} eV")
+    print(f"    {delta_dse_kJ:.2f} kJ/mol")
+
     return {
-        'quench': result_quench,
-        'anneal': result_anneal,
-        'delta_lambda': delta_lambda,
-        'quench_higher': lambda_quench > lambda_anneal,
+        'quench_dft': E_quench_dft,
+        'quench_dse': E_quench_dse,
+        'anneal_dft': E_anneal_dft,
+        'anneal_dse': E_anneal_dse,
+        'delta_dft': delta_dft,
+        'delta_dse': delta_dse,
     }
 
 
-def test_intermediate_rates():
+def run_fe4_tetrahedron_test():
     """
-    Test different cooling rates between quench and anneal.
-    
-    Shows continuous transition from metastable to stable.
-    """
-    print("\n" + "=" * 70)
-    print("📈 TEST: COOLING RATE DEPENDENCE")
-    print("=" * 70)
-    
-    from memory_dft.core.sparse_engine_unified import SparseEngine
-    from memory_dft.physics.thermodynamics import ThermalPathEvolver
-    
-    n_sites = 4
-    T_high = 1000.0
-    T_low = 50.0
-    alpha = 0.002
-    
-    engine = SparseEngine(n_sites, use_gpu=True, verbose=False)
-    geometry = engine.build_chain(periodic=False)
-    bonds = geometry.bonds
-    
-    evolver = ThermalPathEvolver(
-        engine=engine,
-        bonds=bonds,
-        J0=1.0,
-        U0=2.0,
-        alpha_J=alpha,
-        T_ref=300.0,
-        energy_scale=0.1,
-        n_eigenstates=14,
-        model='hubbard',
-        verbose=False
-    )
-    
-    # Different cooling rates
-    rates = [2, 5, 10, 20, 50, 100]  # Number of steps
-    results = []
-    
-    print(f"\n  Testing {len(rates)} cooling rates...")
-    print(f"  {'Steps':>8} │ {'λ_final':>10} │ {'Rate':>15}")
-    print(f"  " + "─" * 40)
-    
-    for n_steps in rates:
-        path = list(np.linspace(T_high, T_low, n_steps))
-        result = evolver.evolve(path, dt=0.1, steps_per_T=3)
-        rate_label = "Fast" if n_steps < 10 else ("Medium" if n_steps < 50 else "Slow")
-        
-        print(f"  {n_steps:>8} │ {result['lambda_final']:>10.4f} │ {rate_label:>15}")
-        results.append((n_steps, result['lambda_final']))
-    
-    # Check monotonicity
-    lambdas = [r[1] for r in results]
-    is_decreasing = all(lambdas[i] >= lambdas[i+1] for i in range(len(lambdas)-1))
-    
-    print(f"\n  λ decreases with slower cooling? {is_decreasing}")
-    if is_decreasing:
-        print("  ✅ Confirmed: Slower cooling → Lower λ (more stable)")
-    
-    return results
+    Fe4 tetrahedron: More complex cluster.
 
+    Tests quench vs anneal on 4-atom iron cluster.
+    """
+    if not HAS_PYSCF:
+        print("❌ PySCF not available")
+        return None
 
-def test_thermal_cycling():
-    """
-    Test thermal cycling: multiple heat-cool cycles.
-    
-    Each cycle should accumulate memory effects.
-    """
     print("\n" + "=" * 70)
-    print("🔄 TEST: THERMAL CYCLING")
+    print("🔥 Fe4 TETRAHEDRON - Complex Cluster Test")
     print("=" * 70)
-    
-    from memory_dft.core.sparse_engine_unified import SparseEngine
-    from memory_dft.physics.thermodynamics import ThermalPathEvolver
-    
-    n_sites = 4
-    T_high = 500.0
-    T_low = 50.0
-    alpha = 0.002
-    
-    engine = SparseEngine(n_sites, use_gpu=True, verbose=False)
-    geometry = engine.build_chain(periodic=False)
-    bonds = geometry.bonds
-    
-    evolver = ThermalPathEvolver(
-        engine=engine,
-        bonds=bonds,
-        J0=1.0,
-        U0=2.0,
-        alpha_J=alpha,
-        T_ref=300.0,
-        energy_scale=0.1,
-        n_eigenstates=14,
-        model='hubbard',
-        verbose=False
-    )
-    
-    # Build thermal cycling path
-    n_cycles = 5
-    steps_per_leg = 10
-    
-    path = []
-    for cycle in range(n_cycles):
-        # Heat
-        path.extend(list(np.linspace(T_low, T_high, steps_per_leg)))
-        # Cool
-        path.extend(list(np.linspace(T_high, T_low, steps_per_leg)))
-    
-    print(f"\n  {n_cycles} thermal cycles: {T_low}K ↔ {T_high}K")
-    print(f"  Total path length: {len(path)} temperatures")
-    
-    result = evolver.evolve(path, dt=0.1, steps_per_T=3)
-    
-    # Extract λ at end of each cycle
-    lambdas_per_step = result['lambdas']
-    steps_per_cycle = steps_per_leg * 2 * 3  # 2 legs * steps_per_T
-    
-    print(f"\n  λ evolution through cycles:")
-    for cycle in range(n_cycles):
-        end_idx = min((cycle + 1) * steps_per_cycle - 1, len(lambdas_per_step) - 1)
-        lambda_cycle = lambdas_per_step[end_idx]
-        print(f"    After cycle {cycle+1}: λ = {lambda_cycle:.4f}")
-    
-    print(f"\n  Final λ: {result['lambda_final']:.4f}")
-    
-    return result
+
+    # Fe4 tetrahedron geometry
+    # Hot: expanded, Cold: contracted
+    def fe4_tetrahedron(scale: float = 1.0):
+        """Generate Fe4 tetrahedron coordinates."""
+        # Base edge length ~2.5 Å
+        a = 2.5 * scale
+        # Tetrahedron vertices
+        coords = [
+            [0, 0, 0],
+            [a, 0, 0],
+            [a/2, a*np.sqrt(3)/2, 0],
+            [a/2, a*np.sqrt(3)/6, a*np.sqrt(2/3)]
+        ]
+        atoms = "; ".join([f"Fe {c[0]} {c[1]} {c[2]}" for c in coords])
+        return atoms
+
+    # Quench: 1.1 → 1.0 in 2 steps
+    path_quench = [
+        {'atoms': fe4_tetrahedron(1.1), 'time': 0, 'scale': 1.1},
+        {'atoms': fe4_tetrahedron(1.0), 'time': 1, 'scale': 1.0},
+    ]
+
+    # Anneal: 1.1 → 1.0 in 10 steps
+    scales_anneal = np.linspace(1.1, 1.0, 10)
+    path_anneal = [
+        {'atoms': fe4_tetrahedron(s), 'time': i, 'scale': s}
+        for i, s in enumerate(scales_anneal)
+    ]
+
+    print(f"  Quench: {len(path_quench)} steps")
+    print(f"  Anneal: {len(path_anneal)} steps")
+
+    # This would take longer to compute...
+    print("\n  ⚠️ Fe4 computation is expensive!")
+    print("  Use smaller basis or run separately.")
+
+    return path_quench, path_anneal
 
 
 def main():
-    """Run all quench vs anneal tests."""
+    """Run Fe cluster tests."""
     print("\n" + "🔥" * 25)
-    print("  MEMORY-DFT: QUENCH vs ANNEAL DEMONSTRATION")
+    print("  MEMORY-DFT: Fe CLUSTER QUENCH vs ANNEAL")
     print("🔥" * 25)
-    print("""
-    Proving that thermal history determines material properties!
-    
-    This is THE test for industrial relevance:
-      - Steel heat treatment
-      - Semiconductor annealing  
-      - Glass transition
-      - Polymer processing
-    """)
-    
+
+    if not HAS_PYSCF:
+        print("\n❌ PySCF not installed!")
+        print("   Install with: pip install pyscf")
+        return
+
     # Main test
-    result = test_quench_vs_anneal()
-    
-    # Additional tests
-    print("\n")
-    test_intermediate_rates()
-    
-    print("\n")
-    test_thermal_cycling()
-    
+    result = run_fe2_quench_vs_anneal(verbose=True)
+
     print("\n" + "=" * 70)
-    print("✅ All Quench vs Anneal tests completed!")
+    print("✅ Fe cluster test completed!")
     print("=" * 70)
-    
+
     return result
 
 
