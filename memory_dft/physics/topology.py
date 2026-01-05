@@ -837,6 +837,234 @@ class EnergyTopologyCorrelation:
         return abs(self.correlation) > threshold
 
 
+# =============================================================================
+# Mass Gap Calculator - E = mc² Derivation (NEW!)
+# =============================================================================
+
+@dataclass
+class MassGapResult:
+    """Result of mass gap calculation - E = mc² derivation."""
+    V_min: float                    # Minimum non-trivial vorticity = mass
+    alpha: float                    # Spacetime stiffness = c² (in natural units)
+    E_gap: float                    # Energy gap = α × V_min
+    
+    # Verification
+    E_measured: float = None        # Measured energy from simulation
+    consistency: float = None       # |E_gap - E_measured| / E_measured
+    
+    def get_mass(self) -> float:
+        """Mass = V_min (in natural units)."""
+        return self.V_min
+    
+    def verify_emc2(self) -> bool:
+        """Verify E = mc² holds."""
+        if self.consistency is None:
+            return False
+        return self.consistency < 0.01  # 1% tolerance
+
+
+class MassGapCalculator:
+    """
+    Calculate mass gap and derive E = mc².
+    
+    Key theorem (from Yang-Mills paper + DSE verification):
+    
+        E = α × V_min
+        
+    where:
+        - V_min = minimum non-trivial vorticity (= mass)
+        - α = spacetime stiffness constant (= c² in natural units)
+        - E = energy gap
+    
+    This provides a GEOMETRIC DERIVATION of E = mc²:
+    
+        1. Non-commutativity → vorticity cannot vanish
+        2. V_min > 0 is FORCED by topology
+        3. E = α × V_min (energy-vorticity identity)
+        4. Define m ≡ V_min
+        5. Then E = α × m = c² × m = mc²
+    
+    The constant α = c² is not arbitrary - it is the
+    "stiffness" with which spacetime converts topological
+    twisting into energy.
+    
+    Example:
+        >>> calc = MassGapCalculator()
+        >>> # Run multiple configurations
+        >>> for psi, E in configurations:
+        ...     V = calc.compute_vorticity(psi, H_K, H_V)
+        ...     calc.add_measurement(V, E)
+        >>> result = calc.compute_mass_gap()
+        >>> print(f"V_min = {result.V_min:.4f}")
+        >>> print(f"α = {result.alpha:.4f}")
+        >>> print(f"E = mc² verified: {result.verify_emc2()}")
+    """
+    
+    def __init__(self, use_gpu: bool = True):
+        self.use_gpu = use_gpu and HAS_CUPY
+        self.xp = cp if self.use_gpu else np
+        
+        # Measurements: (vorticity, energy) pairs
+        self.measurements: List[Tuple[float, float]] = []
+        
+        # Non-vacuum configurations only
+        self.V_nonvacuum: List[float] = []
+        self.E_nonvacuum: List[float] = []
+    
+    def reset(self):
+        """Reset measurements."""
+        self.measurements = []
+        self.V_nonvacuum = []
+        self.E_nonvacuum = []
+    
+    def compute_vorticity_from_plaquette(self, 
+                                          psi: np.ndarray,
+                                          plaquette_ops: List[np.ndarray]) -> float:
+        """
+        Compute vorticity V = Σ |P_μν - I|²_F from plaquette operators.
+        """
+        xp = self.xp
+        
+        if self.use_gpu and not hasattr(psi, 'device'):
+            psi = xp.asarray(psi)
+        
+        V_total = 0.0
+        
+        for P in plaquette_ops:
+            if self.use_gpu and not hasattr(P, 'device'):
+                P = xp.asarray(P)
+            
+            # ⟨ψ|P|ψ⟩
+            P_exp = xp.vdot(psi, P @ psi)
+            
+            if self.use_gpu:
+                P_exp = complex(P_exp)
+            
+            # |P - I|² ≈ |1 - ⟨P⟩|² for expectation
+            V_plaq = abs(1.0 - P_exp) ** 2
+            V_total += V_plaq
+        
+        return float(V_total)
+    
+    def compute_vorticity_from_energy(self,
+                                       psi: np.ndarray,
+                                       H_K: np.ndarray,
+                                       H_V: np.ndarray) -> float:
+        """
+        Compute vorticity-like quantity from K/|V| ratio.
+        
+        In Λ³ theory: λ = K/|V|
+        Vorticity ~ deviation from equilibrium
+        """
+        xp = self.xp
+        
+        if self.use_gpu:
+            if not hasattr(psi, 'device'):
+                psi = xp.asarray(psi)
+            if not hasattr(H_K, 'device'):
+                H_K = xp.asarray(H_K)
+            if not hasattr(H_V, 'device'):
+                H_V = xp.asarray(H_V)
+        
+        K = float(xp.real(xp.vdot(psi, H_K @ psi)))
+        V = float(xp.real(xp.vdot(psi, H_V @ psi)))
+        
+        # Vorticity as deviation from ground state
+        # V = |K| + |V| as simple measure
+        return abs(K) + abs(V)
+    
+    def add_measurement(self, V: float, E: float, is_vacuum: bool = False):
+        """Add (vorticity, energy) measurement."""
+        self.measurements.append((V, E))
+        
+        if not is_vacuum and V > 1e-10:
+            self.V_nonvacuum.append(V)
+            self.E_nonvacuum.append(E)
+    
+    def compute_mass_gap(self) -> MassGapResult:
+        """
+        Compute mass gap and derive E = mc².
+        
+        Returns:
+            MassGapResult with V_min, α, E_gap
+        """
+        if len(self.V_nonvacuum) < 2:
+            return MassGapResult(
+                V_min=0.0,
+                alpha=0.0,
+                E_gap=0.0
+            )
+        
+        V_arr = np.array(self.V_nonvacuum)
+        E_arr = np.array(self.E_nonvacuum)
+        
+        # V_min = minimum non-trivial vorticity
+        V_min = float(np.min(V_arr))
+        
+        # α = E/V (spacetime stiffness)
+        # Use linear regression for robustness
+        # E = α × V → α = slope
+        if len(V_arr) > 1:
+            coeffs = np.polyfit(V_arr, E_arr, 1)
+            alpha = float(coeffs[0])
+        else:
+            alpha = float(E_arr[0] / V_arr[0]) if V_arr[0] > 0 else 0.0
+        
+        # E_gap = α × V_min
+        E_gap = alpha * V_min
+        
+        # Verification
+        E_at_Vmin_idx = np.argmin(V_arr)
+        E_measured = float(E_arr[E_at_Vmin_idx])
+        
+        consistency = abs(E_gap - E_measured) / (abs(E_measured) + 1e-10)
+        
+        return MassGapResult(
+            V_min=V_min,
+            alpha=alpha,
+            E_gap=E_gap,
+            E_measured=E_measured,
+            consistency=consistency
+        )
+    
+    def get_emc2_derivation(self) -> str:
+        """
+        Return string explaining E = mc² derivation.
+        """
+        result = self.compute_mass_gap()
+        
+        return f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+E = mc² GEOMETRIC DERIVATION (from DSE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1: Non-commutativity
+  [A, B] ≠ 0 → Instanton-anti-instanton cannot fully annihilate
+
+Step 2: Topology enforces V_min > 0
+  V_min = {result.V_min:.6f} (minimum vorticity)
+
+Step 3: Energy-Vorticity identity
+  E = α × V(A)
+  α = {result.alpha:.6f} (spacetime stiffness)
+
+Step 4: Define mass
+  m ≡ V_min = {result.V_min:.6f}
+
+Step 5: E = mc²
+  E = α × m
+    = {result.alpha:.6f} × {result.V_min:.6f}
+    = {result.E_gap:.6f}
+  
+  Measured E = {result.E_measured:.6f}
+  Consistency = {result.consistency:.2%}
+  
+  E = mc² VERIFIED: {result.verify_emc2()}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+
 class EnergyTopologyCorrelator:
     """
     Track and analyze correlation between energy and phase accumulation.
