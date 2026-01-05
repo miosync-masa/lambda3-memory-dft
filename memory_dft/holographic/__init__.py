@@ -32,9 +32,20 @@ Author: Masamichi Iizumi & Tamaki (Miosync, Inc.)
 from .dual import (
     HolographicDual,
     quick_holographic_analysis,
+    # Causality analysis
+    transfer_entropy,
+    crosscorr_at_lags,
+    spearman_corr,
+    verify_duality,
+    plot_duality_analysis,
 )
 
 __all__ = [
     'HolographicDual',
     'quick_holographic_analysis',
+    'transfer_entropy',
+    'crosscorr_at_lags',
+    'spearman_corr',
+    'verify_duality',
+    'plot_duality_analysis',
 ]
