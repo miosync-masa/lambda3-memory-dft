@@ -18,10 +18,8 @@ Date: 2025-01-06
 import numpy as np
 from typing import List, Optional, Tuple, Dict, Any
 
-# CI環境対応: ヘッドレスバックエンド
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+# matplotlib は lazy import（プロット関数内でのみ import）
+# これにより、計算部分は matplotlib なしでも動作する
 
 
 class HolographicDual:
@@ -303,11 +301,15 @@ class HolographicDual:
     # =========================================================================
     
     def plot_bulk(self, bulk: Optional[np.ndarray] = None, 
-                  ax: Optional[plt.Axes] = None,
-                  title: str = "Holographic Bulk Geometry") -> plt.Figure:
+                  ax: Optional[Any] = None,
+                  title: str = "Holographic Bulk Geometry"):
         """
         Bulk geometry の可視化
         """
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
         if bulk is None:
             bulk = self._bulk
         
@@ -356,10 +358,14 @@ class HolographicDual:
         return fig
     
     def plot_diagnostics(self, bulk: Optional[np.ndarray] = None,
-                         phi_history: Optional[List[float]] = None) -> plt.Figure:
+                         phi_history: Optional[List[float]] = None):
         """
         Holographic diagnostics の総合プロット
         """
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
         if bulk is None:
             bulk = self._bulk
         if phi_history is None:
@@ -465,6 +471,10 @@ def quick_holographic_analysis(phi_history: List[float],
     }
     
     if plot:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
         fig = holo.plot_diagnostics(bulk, phi_history)
         fig.savefig('dse_holographic_analysis.png', dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -645,10 +655,14 @@ def verify_duality(bulk_history: List[float],
 
 def plot_duality_analysis(results: Dict[str, Any], 
                           title: str = "AdS/CFT Duality Verification",
-                          save: bool = True) -> plt.Figure:
+                          save: bool = True):
     """
     Visualize duality verification results.
     """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
     # (0) Transfer Entropy comparison
@@ -803,6 +817,7 @@ if __name__ == "__main__":
     
     # 可視化
     fig = plot_duality_analysis(results, save=True)
+    import matplotlib.pyplot as plt
     plt.close()
     
     print("\n" + "=" * 60)
