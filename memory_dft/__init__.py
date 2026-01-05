@@ -318,6 +318,17 @@ from .physics.rdm import (
     to_pyscf_rdm2,
 )
 
+# Topology (NEW!)
+from .topology import (
+    TopologyResult,
+    ReconnectionEvent,
+    SpinTopologyCalculator,
+    BerryPhaseCalculator,
+    ZakPhaseCalculator,
+    ReconnectionDetector,
+    TopologyEngine,
+)
+
 # =============================================================================
 # Interfaces (optional - requires PySCF)
 # =============================================================================
@@ -513,6 +524,15 @@ __all__ = [
     'filter_by_distance',
     'from_pyscf_rdm2',
     'to_pyscf_rdm2',
+
+    # Topology (NEW!)
+    'TopologyResult',
+    'ReconnectionEvent',
+    'SpinTopologyCalculator',
+    'BerryPhaseCalculator',
+    'ZakPhaseCalculator',
+    'ReconnectionDetector',
+    'TopologyEngine',  
     
     # Interfaces - PySCF
     'HAS_PYSCF',
