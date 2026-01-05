@@ -40,12 +40,28 @@ from .dual import (
     plot_duality_analysis,
 )
 
+from .measurement import (
+    MeasurementRecord,
+    HolographicMeasurementResult,
+    HolographicMeasurement,
+    quick_holographic_measurement,
+)
+
 __all__ = [
+    # Dual
     'HolographicDual',
     'quick_holographic_analysis',
+    
+    # Causality
     'transfer_entropy',
     'crosscorr_at_lags',
     'spearman_corr',
     'verify_duality',
     'plot_duality_analysis',
+    
+    # Measurement Protocol
+    'MeasurementRecord',
+    'HolographicMeasurementResult',
+    'HolographicMeasurement',
+    'quick_holographic_measurement',
 ]
