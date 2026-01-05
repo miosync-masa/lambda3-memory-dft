@@ -319,7 +319,7 @@ from .physics.rdm import (
 )
 
 # Topology (NEW!)
-from .topology import (
+from .physics.topology import (
     TopologyResult,
     ReconnectionEvent,
     SpinTopologyCalculator,
