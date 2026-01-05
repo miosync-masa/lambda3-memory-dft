@@ -93,6 +93,7 @@ from .topology import (
     # Result containers
     TopologyResult,
     ReconnectionEvent,
+    EnergyTopologyCorrelation,
     
     # Spin topology
     SpinTopologyCalculator,
@@ -106,8 +107,18 @@ from .topology import (
     # Reconnection detection
     ReconnectionDetector,
     
-    # Unified engine
+    # Wavefunction phase winding (NEW!)
+    WavefunctionWindingCalculator,
+    
+    # State-space winding (NEW!)
+    StateSpaceWindingCalculator,
+    
+    # Energy-Topology correlator (NEW!)
+    EnergyTopologyCorrelator,
+    
+    # Unified engines
     TopologyEngine,
+    TopologyEngineExtended,
 )
 
 
@@ -173,9 +184,14 @@ __all__ = [
     # Topology (NEW!)
     'TopologyResult',
     'ReconnectionEvent',
+    'EnergyTopologyCorrelation',
     'SpinTopologyCalculator',
     'BerryPhaseCalculator',
     'ZakPhaseCalculator',
     'ReconnectionDetector',
+    'WavefunctionWindingCalculator',
+    'StateSpaceWindingCalculator',
+    'EnergyTopologyCorrelator',
     'TopologyEngine',
+    'TopologyEngineExtended',
 ]
