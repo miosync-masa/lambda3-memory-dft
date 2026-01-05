@@ -345,6 +345,19 @@ from .physics.topology import (
 from .holographic.dual import (
     HolographicDual,
     quick_holographic_analysis,
+    # Causality analysis
+    transfer_entropy,
+    crosscorr_at_lags,
+    spearman_corr,
+    verify_duality,
+    plot_duality_analysis,
+)
+
+from .holographic.measurement import (
+    MeasurementRecord,
+    HolographicMeasurementResult,
+    HolographicMeasurement,
+    quick_holographic_measurement,
 )
 
 # =============================================================================
@@ -555,6 +568,23 @@ __all__ = [
     'EnergyTopologyCorrelator',
     'TopologyEngine',
     'TopologyEngineExtended',
+
+    # Dual
+    'HolographicDual',
+    'quick_holographic_analysis',
+    
+    # Causality
+    'transfer_entropy',
+    'crosscorr_at_lags',
+    'spearman_corr',
+    'verify_duality',
+    'plot_duality_analysis',
+    
+    # Measurement Protocol
+    'MeasurementRecord',
+    'HolographicMeasurementResult',
+    'HolographicMeasurement',
+    'quick_holographic_measurement',
     
     # Interfaces - PySCF
     'HAS_PYSCF',
