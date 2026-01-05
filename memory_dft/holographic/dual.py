@@ -470,12 +470,270 @@ def quick_holographic_analysis(phi_history: List[float],
 
 
 # =============================================================================
+# Causality Analysis (from PhaseShift-X)
+# =============================================================================
+
+def discretize_quantiles(x: np.ndarray, n_bins: int = 3) -> np.ndarray:
+    """Quantile-based discretization for Transfer Entropy"""
+    qs = np.linspace(0, 1, n_bins + 1)
+    edges = np.quantile(x, qs)
+    edges = np.unique(edges)
+    if len(edges) <= 2:
+        mn, mx = float(np.min(x)), float(np.max(x) + 1e-12)
+        edges = np.linspace(mn, mx, n_bins + 1)
+    d = np.digitize(x, edges[1:-1], right=False)
+    return d.astype(np.int32)
+
+
+def transfer_entropy(x: np.ndarray, y: np.ndarray, n_bins: int = 3) -> float:
+    """
+    Transfer Entropy: TE(X → Y)
+    
+    Measures information flow from X to Y.
+    TE(X→Y) = H(Y_t+1 | Y_t) - H(Y_t+1 | Y_t, X_t)
+    
+    Parameters
+    ----------
+    x : np.ndarray
+        Source time series
+    y : np.ndarray
+        Target time series
+    n_bins : int
+        Number of bins for discretization
+    
+    Returns
+    -------
+    te : float
+        Transfer entropy in nats
+    """
+    xq = discretize_quantiles(x, n_bins)
+    yq = discretize_quantiles(y, n_bins)
+    
+    yt = yq[:-1]  # Y at time t
+    xt = xq[:-1]  # X at time t
+    y1 = yq[1:]   # Y at time t+1
+    
+    n = n_bins
+    p = np.zeros((n, n, n), dtype=float)
+    
+    for i in range(len(y1)):
+        p[y1[i], yt[i], xt[i]] += 1.0
+    p /= max(1.0, p.sum())
+    
+    p_yt_xt = p.sum(axis=0) + 1e-12
+    p_y1_yt = p.sum(axis=2) + 1e-12
+    p_yt = p_yt_xt.sum(axis=1) + 1e-12
+    
+    te = 0.0
+    for a in range(n):
+        for b in range(n):
+            for c in range(n):
+                pij = p[a, b, c]
+                if pij <= 0:
+                    continue
+                te += pij * np.log(
+                    (p[a, b, c] / p_yt_xt[b, c]) / (p_y1_yt[a, b] / p_yt[b])
+                )
+    
+    return float(te)
+
+
+def crosscorr_at_lags(a: np.ndarray, b: np.ndarray, maxlag: int = 16) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Cross-correlation at various lags.
+    
+    Positive lag: a leads b
+    Negative lag: b leads a
+    """
+    lags = np.arange(-maxlag, maxlag + 1, 1)
+    corrs = []
+    
+    a0 = (a - a.mean()) / (a.std() + 1e-12)
+    b0 = (b - b.mean()) / (b.std() + 1e-12)
+    
+    for L in lags:
+        if L == 0:
+            aa, bb = a0, b0
+        elif L > 0:
+            aa, bb = a0[L:], b0[:-L]
+        else:
+            aa, bb = a0[:L], b0[-L:]
+        
+        if len(aa) > 1:
+            corrs.append(float(np.mean(aa * bb)))
+        else:
+            corrs.append(np.nan)
+    
+    return lags, np.array(corrs, dtype=float)
+
+
+def spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
+    """Spearman rank correlation"""
+    def rankdata(a):
+        temp = a.argsort(kind='mergesort')
+        ranks = np.empty_like(temp, dtype=float)
+        ranks[temp] = np.arange(len(a))
+        return ranks
+    
+    xr = rankdata(x)
+    yr = rankdata(y)
+    xr = (xr - xr.mean()) / (xr.std() + 1e-12)
+    yr = (yr - yr.mean()) / (yr.std() + 1e-12)
+    
+    return float(np.mean(xr * yr))
+
+
+def verify_duality(bulk_history: List[float], 
+                   boundary_history: List[float],
+                   n_bins: int = 3,
+                   maxlag: int = 16) -> Dict[str, Any]:
+    """
+    Verify AdS/CFT duality through information flow analysis.
+    
+    Parameters
+    ----------
+    bulk_history : List[float]
+        Time series of bulk observable (e.g., S_RT, complexity)
+    boundary_history : List[float]
+        Time series of boundary observable (e.g., λ, energy)
+    
+    Returns
+    -------
+    results : Dict
+        TE_bulk_to_boundary : float
+        TE_boundary_to_bulk : float
+        duality_index : float  (|TE_B→b - TE_b→B| / max, closer to 0 = better duality)
+        best_lag : int
+        max_corr : float
+        spearman : float
+    """
+    bulk = np.array(bulk_history)
+    boundary = np.array(boundary_history)
+    
+    # Transfer Entropy both directions
+    TE_bulk_to_boundary = transfer_entropy(bulk, boundary, n_bins)
+    TE_boundary_to_bulk = transfer_entropy(boundary, bulk, n_bins)
+    
+    # Duality index: perfect duality → balanced information flow
+    max_te = max(TE_bulk_to_boundary, TE_boundary_to_bulk, 1e-12)
+    duality_index = abs(TE_bulk_to_boundary - TE_boundary_to_bulk) / max_te
+    
+    # Cross-correlation
+    lags, corrs = crosscorr_at_lags(bulk, boundary, maxlag)
+    best_idx = int(np.nanargmax(np.abs(corrs)))
+    best_lag = int(lags[best_idx])
+    max_corr = float(corrs[best_idx])
+    
+    # Spearman
+    rho = spearman_corr(bulk, boundary)
+    
+    return {
+        'TE_bulk_to_boundary': TE_bulk_to_boundary,
+        'TE_boundary_to_bulk': TE_boundary_to_bulk,
+        'duality_index': duality_index,
+        'best_lag': best_lag,
+        'max_corr': max_corr,
+        'spearman': rho,
+        'lags': lags,
+        'corrs': corrs,
+    }
+
+
+def plot_duality_analysis(results: Dict[str, Any], 
+                          title: str = "AdS/CFT Duality Verification",
+                          save: bool = True) -> plt.Figure:
+    """
+    Visualize duality verification results.
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # (0) Transfer Entropy comparison
+    ax = axes[0]
+    te_vals = [results['TE_bulk_to_boundary'], results['TE_boundary_to_bulk']]
+    colors = ['#2E86AB', '#A23B72']
+    bars = ax.bar(['Bulk → Boundary', 'Boundary → Bulk'], te_vals, 
+                  color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+    ax.set_ylabel('Transfer Entropy (nats)')
+    ax.set_title(f"Information Flow\nDuality Index = {results['duality_index']:.3f}")
+    ax.grid(axis='y', alpha=0.3)
+    
+    for bar, val in zip(bars, te_vals):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
+                f'{val:.4f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
+    # (1) Cross-correlation
+    ax = axes[1]
+    ax.plot(results['lags'], results['corrs'], 'o-', linewidth=2, markersize=5, color='navy')
+    ax.axvline(results['best_lag'], color='red', linestyle='--', linewidth=2, 
+               label=f'Best lag = {results["best_lag"]}')
+    ax.axhline(0, color='gray', linestyle='-', linewidth=0.8)
+    ax.set_xlabel('Lag (steps)')
+    ax.set_ylabel('Pearson correlation')
+    ax.set_title(f'Cross-correlation\nMax r = {results["max_corr"]:.3f}')
+    ax.legend()
+    ax.grid(alpha=0.3)
+    
+    # (2) Summary
+    ax = axes[2]
+    summary_text = f"""
+    ══════════════════════════════════
+         DUALITY VERIFICATION
+    ══════════════════════════════════
+    
+    Transfer Entropy:
+      Bulk → Boundary: {results['TE_bulk_to_boundary']:.4f} nats
+      Boundary → Bulk: {results['TE_boundary_to_bulk']:.4f} nats
+    
+    Duality Index: {results['duality_index']:.4f}
+      (0 = perfect duality)
+    
+    Correlation:
+      Pearson (best lag): {results['max_corr']:.4f}
+      Spearman: {results['spearman']:.4f}
+      Best lag: {results['best_lag']} steps
+    
+    ══════════════════════════════════
+    """
+    
+    # Interpretation
+    di = results['duality_index']
+    if di < 0.2:
+        verdict = "✓ STRONG DUALITY"
+        color = 'green'
+    elif di < 0.5:
+        verdict = "○ MODERATE DUALITY"
+        color = 'orange'
+    else:
+        verdict = "✗ WEAK DUALITY"
+        color = 'red'
+    
+    summary_text += f"\n    Verdict: {verdict}"
+    
+    ax.text(0.5, 0.5, summary_text, transform=ax.transAxes,
+            fontsize=11, verticalalignment='center', horizontalalignment='center',
+            fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    ax.axis('off')
+    ax.set_title('Summary')
+    
+    plt.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    
+    if save:
+        fname = 'duality_verification.png'
+        plt.savefig(fname, dpi=150, bbox_inches='tight')
+        print(f"[Saved] {fname}")
+    
+    return fig
+
+
+# =============================================================================
 # Test
 # =============================================================================
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("DSE Holographic Module Test")
+    print("DSE Holographic Module Test + Duality Verification")
     print("=" * 60)
     
     # ダミーの位相履歴を生成（OAM pump + free evolution 的な）
@@ -486,34 +744,63 @@ if __name__ == "__main__":
     N_total = N_pump + N_free
     
     phi_history = []
+    boundary_history = []  # Boundary observable (e.g., energy)
     phi = 0.0
+    E = 1.0
     
     for n in range(N_total):
         if n < N_pump:
             # Pump phase: 位相が蓄積
             d_phi = 0.1 * np.sin(0.3 * n) + 0.02 * np.random.randn()
+            d_E = 0.05 * np.cos(0.3 * n) + 0.01 * np.random.randn()
         else:
             # Free evolution: 緩やかな減衰 + 揺らぎ
             d_phi = -0.01 * phi + 0.01 * np.random.randn()
+            d_E = -0.02 * (E - 1.0) + 0.01 * np.random.randn()
         
         phi += d_phi
+        E += d_E
         phi_history.append(phi)
+        boundary_history.append(E)
     
-    print(f"\nGenerated {len(phi_history)} steps of phase history")
-    print(f"  φ_initial = {phi_history[0]:.4f}")
-    print(f"  φ_final   = {phi_history[-1]:.4f}")
-    print(f"  φ_max     = {max(phi_history):.4f}")
+    print(f"\nGenerated {len(phi_history)} steps of history")
     
     # Holographic analysis
     print("\n--- Holographic Analysis ---")
-    results = quick_holographic_analysis(phi_history, plot=True)
+    holo = HolographicDual(L_ads=1.0, Z_depth=16)
+    bulk = holo.history_to_bulk(phi_history)
     
-    print(f"\nResults:")
-    print(f"  RT Entropy:     S_RT = {results['S_RT']:.4f}")
-    print(f"  Complexity (V): C_V  = {results['C_V']:.4f}")
-    print(f"  Complexity (A): C_A  = {results['C_A']:.4f}")
-    print(f"  Hawking Temp:   T_H  = {results['T_H']:.4f}")
+    S_RT = holo.rt_entropy()
+    C_V = holo.complexity_volume()
+    
+    print(f"  S_RT = {S_RT:.4f}")
+    print(f"  C_V  = {C_V:.4f}")
+    
+    # Duality verification
+    print("\n--- Duality Verification ---")
+    
+    # Bulk observable: RT entropy時系列を構築
+    bulk_series = []
+    for t in range(10, N_total):
+        holo_t = HolographicDual(Z_depth=min(t, 16))
+        holo_t.history_to_bulk(phi_history[:t])
+        bulk_series.append(holo_t.rt_entropy())
+    
+    boundary_series = boundary_history[10:]
+    
+    results = verify_duality(bulk_series, boundary_series)
+    
+    print(f"\n  TE(Bulk → Boundary): {results['TE_bulk_to_boundary']:.4f} nats")
+    print(f"  TE(Boundary → Bulk): {results['TE_boundary_to_bulk']:.4f} nats")
+    print(f"  Duality Index: {results['duality_index']:.4f}")
+    print(f"  Best lag: {results['best_lag']}")
+    print(f"  Max correlation: {results['max_corr']:.4f}")
+    print(f"  Spearman: {results['spearman']:.4f}")
+    
+    # 可視化
+    fig = plot_duality_analysis(results, save=True)
+    plt.close()
     
     print("\n" + "=" * 60)
-    print("DSE Holographic Module Test Complete")
+    print("DSE Holographic + Duality Test Complete")
     print("=" * 60)
