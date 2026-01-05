@@ -322,11 +322,16 @@ from .physics.rdm import (
 from .physics.topology import (
     TopologyResult,
     ReconnectionEvent,
+    EnergyTopologyCorrelation,
     SpinTopologyCalculator,
     BerryPhaseCalculator,
     ZakPhaseCalculator,
     ReconnectionDetector,
+    WavefunctionWindingCalculator,
+    StateSpaceWindingCalculator,
+    EnergyTopologyCorrelator,
     TopologyEngine,
+    TopologyEngineExtended,
 )
 
 # =============================================================================
@@ -528,11 +533,16 @@ __all__ = [
     # Topology (NEW!)
     'TopologyResult',
     'ReconnectionEvent',
+    'EnergyTopologyCorrelation',
     'SpinTopologyCalculator',
     'BerryPhaseCalculator',
     'ZakPhaseCalculator',
     'ReconnectionDetector',
-    'TopologyEngine',  
+    'WavefunctionWindingCalculator',
+    'StateSpaceWindingCalculator',
+    'EnergyTopologyCorrelator',
+    'TopologyEngine',
+    'TopologyEngineExtended',
     
     # Interfaces - PySCF
     'HAS_PYSCF',
