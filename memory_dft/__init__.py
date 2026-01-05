@@ -339,27 +339,51 @@ from .physics.topology import (
 )
 
 # =============================================================================
-# holographic
+# Holographic (optional - requires matplotlib)
 # =============================================================================
-
-from .holographic.dual import (
-    HolographicDual,
-    quick_holographic_analysis,
-    # Causality analysis
-    transfer_entropy,
-    crosscorr_at_lags,
-    spearman_corr,
-    verify_duality,
-    plot_duality_analysis,
-)
-
-from .holographic.measurement import (
-    MeasurementRecord,
-    HolographicMeasurementResult,
-    HolographicMeasurement,
-    quick_holographic_measurement,
-)
-
+try:
+    from .holographic.dual import (
+        HolographicDual,
+        quick_holographic_analysis,
+        # Causality analysis
+        transfer_entropy,
+        crosscorr_at_lags,
+        spearman_corr,
+        verify_duality,
+        plot_duality_analysis,
+    )
+    from .holographic.measurement import (
+        MeasurementRecord,
+        HolographicMeasurementResult,
+        HolographicMeasurement,
+        quick_holographic_measurement,
+    )
+    HAS_HOLOGRAPHIC = True
+except ImportError:
+    HAS_HOLOGRAPHIC = False
+    
+    def HolographicDual(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def quick_holographic_analysis(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def transfer_entropy(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def crosscorr_at_lags(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def spearman_corr(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def verify_duality(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def plot_duality_analysis(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def HolographicMeasurement(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def quick_holographic_measurement(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    
+    MeasurementRecord = None
+    HolographicMeasurementResult = None
+  
 # =============================================================================
 # Interfaces (optional - requires PySCF)
 # =============================================================================
@@ -585,6 +609,7 @@ __all__ = [
     'HolographicMeasurementResult',
     'HolographicMeasurement',
     'quick_holographic_measurement',
+    'HAS_HOLOGRAPHIC',
     
     # Interfaces - PySCF
     'HAS_PYSCF',
