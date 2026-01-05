@@ -94,6 +94,7 @@ from .topology import (
     TopologyResult,
     ReconnectionEvent,
     EnergyTopologyCorrelation,
+    MassGapResult,                    # NEW!
     
     # Spin topology
     SpinTopologyCalculator,
@@ -115,6 +116,9 @@ from .topology import (
     
     # Energy-Topology correlator (NEW!)
     EnergyTopologyCorrelator,
+    
+    # Mass Gap Calculator - E = mc² derivation (NEW!)
+    MassGapCalculator,
     
     # Unified engines
     TopologyEngine,
@@ -185,6 +189,7 @@ __all__ = [
     'TopologyResult',
     'ReconnectionEvent',
     'EnergyTopologyCorrelation',
+    'MassGapResult',
     'SpinTopologyCalculator',
     'BerryPhaseCalculator',
     'ZakPhaseCalculator',
@@ -192,6 +197,7 @@ __all__ = [
     'WavefunctionWindingCalculator',
     'StateSpaceWindingCalculator',
     'EnergyTopologyCorrelator',
+    'MassGapCalculator',
     'TopologyEngine',
     'TopologyEngineExtended',
 ]
