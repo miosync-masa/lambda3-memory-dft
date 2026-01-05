@@ -323,6 +323,7 @@ from .physics.topology import (
     TopologyResult,
     ReconnectionEvent,
     EnergyTopologyCorrelation,
+    MassGapResult,                    # NEW!
     SpinTopologyCalculator,
     BerryPhaseCalculator,
     ZakPhaseCalculator,
@@ -330,6 +331,7 @@ from .physics.topology import (
     WavefunctionWindingCalculator,
     StateSpaceWindingCalculator,
     EnergyTopologyCorrelator,
+    MassGapCalculator,
     TopologyEngine,
     TopologyEngineExtended,
 )
