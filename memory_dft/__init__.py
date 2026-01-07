@@ -73,56 +73,37 @@ __version__ = "1.0.0"
 # =============================================================================
 # Core Components
 # =============================================================================
+from .sparse_engine_unified import (
+    # Main engine
+    SparseEngine,
+    
+    # Geometry
+    SystemGeometry,
+    LatticeGeometry2D,
+    LatticeGeometry,
+    
+    # Factory functions
+    create_chain,
+    create_ladder,
+    create_square_lattice,
+    
+    # Result container
+    ComputeResult,
+)
 
-from .core.memory_kernel import (
+from .memory_kernel import (
     MemoryKernel,
     MemoryKernelConfig,
     HistoryEntry,
 )
 
-from .core.history_manager import (
-    HistoryManager,
-    HistoryManagerGPU,
-    StateSnapshot,
-    LambdaDensityCalculator,
-)
-
-# =============================================================================
-# Unified Sparse Engine (v0.5.0)
-# Replaces: sparse_engine.py, hubbard_engine.py, operators.py, hamiltonian.py
-# =============================================================================
-
-from .core.sparse_engine_unified import (
-    # Main class
-    SparseEngine,
-    # Data classes
-    SystemGeometry,
-    ComputeResult,
-)
-
-# =============================================================================
-# Lattice Geometry (now in sparse_engine_unified)
-# =============================================================================
-
-from .core.sparse_engine_unified import (
-    LatticeGeometry2D,
-    LatticeGeometry,
-    create_chain,
-    create_ladder,
-    create_square_lattice,
-)
-
-# =============================================================================
-# core/environment_operators.py 
-# =============================================================================
-from .core.environment_operators import (
-    # Physical Constants
-    K_B_EV,
-    K_B_J,
-    H_EV,
-    HBAR_EV,
-    
-    # Thermodynamic Utilities
+from .environment_operators import (
+    EnvironmentBuilder,
+    EnvironmentOperator,
+    TemperatureOperator,
+    StressOperator,
+    Dislocation,
+    # Thermodynamic utilities
     T_to_beta,
     beta_to_T,
     thermal_energy,
@@ -130,16 +111,7 @@ from .core.environment_operators import (
     partition_function,
     compute_entropy,
     compute_free_energy,
-    
-    # Dislocation
-    Dislocation,
-    compute_peach_koehler_force,
-    
-    # Environment Operators
-    EnvironmentOperator,
-    TemperatureOperator,
-    StressOperator,
-    EnvironmentBuilder,
+    compute_heat_capacity,
 )
 
 # =============================================================================
@@ -285,40 +257,33 @@ except ImportError:
 # =============================================================================
 
 __all__ = [
-    # Version
-    '__version__',
-    
-    # Core - Memory Kernels
-    'MemoryKernel',
-    'MemoryKernelConfig',
-    'HistoryEntry',
-  
-    # Core - HistoryManager
-    'HistoryManager',
-    'HistoryManagerGPU',
-    'StateSnapshot',
-    'LambdaDensityCalculator',
-    
-    # Core - Unified Sparse Engine (v0.5.0)
+    # Engine
     'SparseEngine',
-    'SystemGeometry',
-    'ComputeResult',
-    'SparseHamiltonianEngine',
     
-    # Core - Lattice
+    # Geometry
+    'SystemGeometry',
     'LatticeGeometry2D',
     'LatticeGeometry',
     'create_chain',
     'create_ladder',
     'create_square_lattice',
-
-    # Physical Constants
-    'K_B_EV',
-    'K_B_J',
-    'H_EV',
-    'HBAR_EV',
     
-    # Thermodynamic Utilities
+    # Result
+    'ComputeResult',
+    
+    # Memory
+    'MemoryKernel',
+    'MemoryKernelConfig',
+    'HistoryEntry',
+    
+    # Environment
+    'EnvironmentBuilder',
+    'EnvironmentOperator',
+    'TemperatureOperator',
+    'StressOperator',
+    'Dislocation',
+    
+    # Thermodynamics
     'T_to_beta',
     'beta_to_T',
     'thermal_energy',
@@ -326,16 +291,7 @@ __all__ = [
     'partition_function',
     'compute_entropy',
     'compute_free_energy',
-   
-    # Dislocation
-    'Dislocation',
-    'compute_peach_koehler_force',
-  
-    # Environment Operators
-    "EnvironmentOperator",
-    "TemperatureOperator",
-    "StressOperator",
-    "EnvironmentBuilder",
+    'compute_heat_capacity',
 
     # Solver
     'DSESolver',
