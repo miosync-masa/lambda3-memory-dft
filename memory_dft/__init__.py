@@ -66,6 +66,16 @@ from .core.environment_operators import (
     compute_heat_capacity,
 )
 
+from .core.material_failure import (
+    ThermalTopologyResult,
+    StressTopologyResult,
+    FailurePrediction,
+    ThermalTopologyAnalyzer,
+    StressTopologyAnalyzer,
+    CombinedFailureAnalyzer,
+    DSETopologyTest,
+)
+
 # =============================================================================
 # Solvers
 # =============================================================================
@@ -219,6 +229,32 @@ __all__ = [
     'create_chain',
     'create_ladder',
     'create_square_lattice',
+
+       # Data Classes
+    'TopologyResult',
+    'ThermalTopologyResult',
+    'StressTopologyResult',
+    'FailurePrediction',
+    
+    # Analyzers
+    'ThermalTopologyAnalyzer',
+    'StressTopologyAnalyzer',
+    'CombinedFailureAnalyzer',
+    
+    # Test Suite
+    'DSETopologyTest',
+    'LocalThermalEnsemble',
+    
+    # Utilities
+    'get_xp',
+    'to_device',
+    'to_host',
+    'eigsh_wrapper',
+    
+    # Constants
+    'HAS_CUPY',
+    'HAS_ENV_OPS',
+    'k_B',
     
     # Result
     'ComputeResult',
