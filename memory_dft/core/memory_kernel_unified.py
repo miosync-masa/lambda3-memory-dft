@@ -49,6 +49,14 @@ except ImportError:
     cp = None
     HAS_CUPY = False
 
+# Vorticity Calculator（本格版）
+try:
+    from vorticity import VorticityCalculator
+    HAS_VORTICITY = True
+except ImportError:
+    VorticityCalculator = None
+    HAS_VORTICITY = False
+
 
 # =============================================================================
 # Configuration
@@ -237,9 +245,11 @@ class MemoryKernel:
                   rdm2: np.ndarray,
                   n_orb: int,
                   E_xc: float,
+                  local_range: int = 2,
+                  distance_matrix: Optional[np.ndarray] = None,
                   use_gpu: bool = True) -> 'MemoryKernel':
         """
-        2-RDM から直接構築
+        2-RDM から直接構築（本格版 VorticityCalculator 使用）
         
         内部で Vorticity を計算して γ_memory を導出
         
@@ -247,11 +257,28 @@ class MemoryKernel:
             rdm2: 2粒子密度行列 (n_orb, n_orb, n_orb, n_orb)
             n_orb: 軌道数
             E_xc: 相関エネルギー
+            local_range: 「局所」の定義（デフォルト: 2）
+            distance_matrix: 空間距離行列（分子系用、Noneならインデックス差）
             use_gpu: GPU使用フラグ
+            
+        Note:
+            VorticityCalculator が利用可能な場合は本格版を使用
+            利用不可の場合は簡易版にフォールバック
         """
-        # Vorticity 計算（簡易版）
-        V_total = cls._compute_vorticity_simple(rdm2, n_orb, max_range=None)
-        V_local = cls._compute_vorticity_simple(rdm2, n_orb, max_range=2)
+        if HAS_VORTICITY:
+            # 本格版 VorticityCalculator を使用
+            calc = VorticityCalculator(use_gpu=False)  # 内部計算はCPUで
+            decomp = calc.compute_gamma_decomposition(
+                rdm2, n_orb, E_xc,
+                local_range=local_range,
+                distance_matrix=distance_matrix
+            )
+            V_total = decomp['V_total']
+            V_local = decomp['V_local']
+        else:
+            # 簡易版にフォールバック
+            V_total = cls._compute_vorticity_simple(rdm2, n_orb, max_range=None)
+            V_local = cls._compute_vorticity_simple(rdm2, n_orb, max_range=local_range)
         
         return cls.from_vorticity(V_total, V_local, E_xc, use_gpu)
     
