@@ -72,6 +72,8 @@ class SystemGeometry:
     burgers_vector: Optional[Tuple[float, float, float]] = None
     Lx: Optional[int] = None
     Ly: Optional[int] = None
+    periodic: bool = False
+  
     
     @property
     def dim(self) -> int:
@@ -150,6 +152,13 @@ class LatticeGeometry2D:
     def n_sites(self) -> int:
         """Alias for N_spins (compatibility with SystemGeometry)."""
         return self.N_spins
+
+    @property
+    def Z_eff(self) -> float:
+        """Effective coordination number."""
+        if self.n_sites == 0:
+            return 0.0
+        return 2 * len(self.bonds) / self.n_sites
     
     def idx(self, x: int, y: int) -> int:
         """Convert (x, y) coordinates to linear site index."""
@@ -788,31 +797,27 @@ class SparseEngine:
     build_heisenberg_hamiltonian = build_heisenberg
     build_hubbard_hamiltonian = build_hubbard
 
-    # -------------------------------------------------------------------------
-    # Defect and Dislocation Methods
-    # -------------------------------------------------------------------------
-    
+    # =========================================================================
+    # Defects Hamiltonian
+    # =========================================================================
+
     def build_square_with_defects(self,
-                                   Lx: int,
-                                   Ly: int,
-                                   vacancies: List[int] = None,
-                                   weak_bonds: List[Tuple[int, int]] = None,
-                                   periodic: bool = False) -> 'SystemGeometry':
+                               Lx: int,
+                               Ly: int,
+                               vacancies: List[int] = None,
+                               weak_bonds: List[Tuple[int, int]] = None,
+                               periodic: bool = True) -> 'SystemGeometry':
         """
         Build 2D square lattice with point defects.
         
         Args:
             Lx, Ly: Lattice dimensions
-            vacancies: List of site indices to remove (vacancy sites)
+            vacancies: List of site indices to remove
             weak_bonds: List of (i, j) bonds to mark as weak
-            periodic: Use periodic boundary conditions
+            periodic: Use periodic boundary conditions (default True = bulk!)
             
         Returns:
-            SystemGeometry with defect information stored in metadata
-            
-        Example:
-            # 4x4 lattice with vacancy at site 5
-            geom = engine.build_square_with_defects(4, 4, vacancies=[5])
+            SystemGeometry with defect information
         """
         vacancies = vacancies or []
         weak_bonds = weak_bonds or []
@@ -828,14 +833,22 @@ class SparseEngine:
                     continue
                 
                 # Right neighbor
-                if x < Lx - 1 or periodic:
-                    j = y * Lx + ((x + 1) % Lx)
+                if x < Lx - 1:
+                    j = y * Lx + (x + 1)
+                    if j not in vacancies:
+                        bonds.append((i, j))
+                elif periodic:
+                    j = y * Lx + 0  # wrap to x=0
                     if j not in vacancies:
                         bonds.append((i, j))
                 
                 # Down neighbor
-                if y < Ly - 1 or periodic:
-                    j = ((y + 1) % Ly) * Lx + x
+                if y < Ly - 1:
+                    j = (y + 1) * Lx + x
+                    if j not in vacancies:
+                        bonds.append((i, j))
+                elif periodic:
+                    j = 0 * Lx + x  # wrap to y=0
                     if j not in vacancies:
                         bonds.append((i, j))
         
@@ -849,10 +862,10 @@ class SparseEngine:
         geom = SystemGeometry(
             n_sites=Lx * Ly,
             bonds=bonds,
-            positions=positions
+            positions=positions,
+            periodic=periodic,  # ← NEW!
         )
         
-        # Store defect info as attributes
         geom.vacancies = vacancies
         geom.weak_bonds = weak_bonds
         geom.Lx = Lx
