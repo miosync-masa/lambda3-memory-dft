@@ -125,6 +125,13 @@ from .topology import (
     TopologyEngineExtended,
 )
 
+from .dislocation_dynamics import (
+    Dislocation,
+    DislocationDynamics,
+    plot_pileup_results,
+    plot_hall_petch_dd,
+)
+
 
 __all__ = [
     # Lambda3 / Stability
@@ -200,4 +207,10 @@ __all__ = [
     'MassGapCalculator',
     'TopologyEngine',
     'TopologyEngineExtended',
+
+    #Dislocation Dynamics
+    'Dislocation',
+    'DislocationDynamics',
+    'plot_pileup_results',
+    'plot_hall_petch_dd',
 ]
