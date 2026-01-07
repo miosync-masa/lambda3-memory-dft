@@ -55,17 +55,15 @@ try:
     from memory_dft.core.sparse_engine_unified import SparseEngine, SystemGeometry
     from memory_dft.core.history_manager import HistoryManager, StateSnapshot
     from memory_dft.core.memory_kernel import (
+        SimpleMemoryKernel,
         CompositeMemoryKernel,
-        PowerLawKernel,
-        StretchedExpKernel,
-        ExclusionKernel,
-        KernelWeights,
     )
 except ImportError:
     SparseEngine = Any
     SystemGeometry = Any
     HistoryManager = None
     StateSnapshot = None
+    SimpleMemoryKernel = None
     CompositeMemoryKernel = None
 
 # Physics imports
@@ -273,28 +271,28 @@ class EngineeringSolver(ABC):
         if use_memory and HistoryManager is not None:
             self.history_manager = HistoryManager(
                 max_history=1000,
+                compression_threshold=500,
                 use_gpu=self.use_gpu
             )
         else:
             self.history_manager = None
         
-        if use_memory and CompositeMemoryKernel is not None:
-            self.memory_kernel = CompositeMemoryKernel(
-                weights=KernelWeights(
-                    field=0.3,
-                    phys=0.4,
-                    chem=0.2,
-                    exclusion=0.1
-                ),
-                kernels={
-                    'field': PowerLawKernel(alpha=0.5, tau=10.0),
-                    'physical': PowerLawKernel(alpha=1.0, tau=5.0),
-                    'chemical': StretchedExpKernel(tau=3.0, beta=0.7),
-                    'exclusion': ExclusionKernel(r_cut=2.0),
-                }
-            )
+        # SimpleMemoryKernel is better for DSE (manages history internally)
+        if use_memory:
+            try:
+                from memory_dft.core.memory_kernel import SimpleMemoryKernel
+                self.memory_kernel = SimpleMemoryKernel(
+                    eta=0.2,
+                    tau=5.0,
+                    gamma=0.5
+                )
+            except ImportError:
+                self.memory_kernel = None
         else:
             self.memory_kernel = None
+        
+        # Track current time step
+        self.current_time = 0.0
         
         # Memory contribution history
         self.memory_history: List[float] = []
@@ -373,9 +371,10 @@ class EngineeringSolver(ABC):
     
     def _build_memory_hamiltonian(self):
         """
-        Build history-dependent memory term.
+        Build history-dependent memory term using SimpleMemoryKernel.
         
-        H_memory = Σ_τ K(t-τ) × V_interaction(τ)
+        SimpleMemoryKernel.compute_memory_contribution(t, psi) returns
+        the memory-weighted Δλ contribution.
         
         This is DSE's core feature!
         γ_memory = 1.216 → 46.7% of correlations are non-Markovian
@@ -387,29 +386,19 @@ class EngineeringSolver(ABC):
         
         dim = self.engine.dim
         
-        if self.history_manager is None or len(self.history_manager.history) < 2:
+        # If no memory kernel or no psi, return zero
+        if self.memory_kernel is None or self.psi is None:
             return self._to_sparse(xp.zeros(dim, dtype=xp.float64))
         
-        history = self.history_manager.history
+        # Get memory contribution from SimpleMemoryKernel
+        psi_host = self._to_host(self.psi)
+        delta_lambda = self.memory_kernel.compute_memory_contribution(
+            self.current_time, psi_host
+        )
         
-        memory_diag = xp.zeros(dim, dtype=xp.float64)
-        total_weight = 0.0
-        
-        # Look back at history (max 50 steps)
-        for tau, snapshot in enumerate(history[-50:]):
-            weight = self.memory_kernel.evaluate(tau + 1)
-            total_weight += weight
-            
-            if hasattr(snapshot, 'lambda_val'):
-                lambda_past = snapshot.lambda_val
-            else:
-                lambda_past = 0.5
-            
-            # Memory contribution: weighted by past λ
-            memory_diag += weight * lambda_past * 0.01
-        
-        if total_weight > 0:
-            memory_diag /= total_weight
+        # Convert to diagonal Hamiltonian term
+        # H_memory scales with delta_lambda
+        memory_diag = xp.ones(dim, dtype=xp.float64) * delta_lambda * 0.01
         
         return self._to_sparse(memory_diag)
     
@@ -538,7 +527,7 @@ class EngineeringSolver(ABC):
         """
         Single time evolution step with history recording.
         
-        DSE: Records state in HistoryManager automatically!
+        DSE: Records state in both HistoryManager and SimpleMemoryKernel!
         """
         xp = self.xp
         
@@ -557,20 +546,27 @@ class EngineeringSolver(ABC):
             self.psi = expm_multiply(-1j * dt * H, self.psi)
             self.psi = self.psi / np.linalg.norm(self.psi)
         
-        # DSE: Record in history!
+        # Update time
+        self.current_time += dt
+        
+        # Compute observables
+        lam = self.compute_lambda()
+        psi_host = self._to_host(self.psi)
+        H_psi = H @ self.psi
+        energy = float(xp.real(xp.vdot(self.psi, H_psi)))
+        
+        # DSE: Record in HistoryManager
         if self.history_manager is not None:
-            lam = self.compute_lambda()
-            psi_host = self._to_host(self.psi)
-            H_psi = H @ self.psi
-            energy = float(xp.real(xp.vdot(self.psi, H_psi)))
-            
-            self.history_manager.record(
-                StateSnapshot(
-                    psi=psi_host.copy(),
-                    lambda_val=lam,
-                    energy=energy
-                )
+            self.history_manager.add(
+                time=self.current_time,
+                state=psi_host.copy(),
+                energy=energy,
+                lambda_density=lam
             )
+        
+        # DSE: Record in SimpleMemoryKernel (for memory contribution calc)
+        if self.memory_kernel is not None and hasattr(self.memory_kernel, 'add_state'):
+            self.memory_kernel.add_state(self.current_time, lam, psi_host.copy())
         
         return self.psi
     
@@ -681,9 +677,13 @@ class EngineeringSolver(ABC):
         self.T_history = []
         self.sigma_history = []
         self.memory_history = []
+        self.current_time = 0.0
         
         if self.history_manager is not None:
             self.history_manager.clear()
+        
+        if self.memory_kernel is not None and hasattr(self.memory_kernel, 'clear'):
+            self.memory_kernel.clear()
     
     def get_history_summary(self) -> Dict[str, Any]:
         """Get summary of accumulated history."""
