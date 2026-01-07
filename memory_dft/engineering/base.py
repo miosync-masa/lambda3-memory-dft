@@ -282,8 +282,8 @@ class EngineeringSolver(ABC):
             self.memory_kernel = CompositeMemoryKernel(
                 weights=KernelWeights(
                     field=0.3,
-                    physical=0.4,
-                    chemical=0.2,
+                    phys=0.4,
+                    chem=0.2,
                     exclusion=0.1
                 ),
                 kernels={
