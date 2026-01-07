@@ -28,7 +28,8 @@ from .vorticity import (
     VorticityCalculator,
     VorticityResult,
     GammaExtractor,
-    MemoryKernelFromGamma
+    compute_orbital_distance_matrix,
+    vorticity_from_pyscf,
 )
 
 # Thermodynamics
@@ -70,22 +71,17 @@ from .thermodynamics import (
 
 # Two-Particle Reduced Density Matrix
 from .rdm import (
-    # Result container
+    # Base
+    RDMCalculator,
     RDM2Result,
-    
-    # Core computation
-    compute_2rdm,
-    compute_2rdm_with_ops,
-    
-    # Correlation analysis
-    compute_density_density_correlation,
-    compute_connected_correlation,
-    compute_correlation_matrix,
-    filter_by_distance,
-    
-    # External interface
-    from_pyscf_rdm2,
-    to_pyscf_rdm2,
+    SystemType,
+    # Implementations
+    HubbardRDM,
+    HeisenbergRDM,
+    PySCFRDM,
+    # Factory
+    get_rdm_calculator,
+    compute_rdm2,
 )
 
 # Topology (NEW!)
@@ -125,14 +121,6 @@ from .topology import (
     TopologyEngineExtended,
 )
 
-from .dislocation_dynamics import (
-    Dislocation,
-    DislocationDynamics,
-    plot_pileup_results,
-    plot_hall_petch_dd,
-)
-
-
 __all__ = [
     # Lambda3 / Stability
     'Lambda3Calculator',
@@ -145,7 +133,8 @@ __all__ = [
     'VorticityCalculator',
     'VorticityResult',
     'GammaExtractor',
-    'MemoryKernelFromGamma',
+    'compute_orbital_distance_matrix',
+    'vorticity_from_pyscf',
     
     # Thermodynamics - Constants
     'K_B_EV',
@@ -182,15 +171,16 @@ __all__ = [
     'ThermalPathEvolver',
     
     # 2-RDM
+    'RDMCalculator',
     'RDM2Result',
-    'compute_2rdm',
-    'compute_2rdm_with_ops',
-    'compute_density_density_correlation',
-    'compute_connected_correlation',
-    'compute_correlation_matrix',
-    'filter_by_distance',
-    'from_pyscf_rdm2',
-    'to_pyscf_rdm2',
+    'SystemType',
+    # Implementations
+    'HubbardRDM',
+    'HeisenbergRDM',
+    'PySCFRDM',
+    # Factory
+    'get_rdm_calculator',
+    'compute_rdm2',
     
     # Topology (NEW!)
     'TopologyResult',
@@ -208,9 +198,4 @@ __all__ = [
     'TopologyEngine',
     'TopologyEngineExtended',
 
-    #Dislocation Dynamics
-    'Dislocation',
-    'DislocationDynamics',
-    'plot_pileup_results',
-    'plot_hall_petch_dd',
 ]
