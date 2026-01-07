@@ -6,7 +6,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="memory_dft",
-    version="0.1.0",
+    version="1.0.0",
     author="Masamichi Iizumi, Tamaki Iizumi",
     author_email="",
     description="Direct Schrödinger Evolution (DSE)",
