@@ -222,6 +222,35 @@ def build_hamiltonian(model, lattice, ops, **kwargs):
     else:
         raise ValueError(f"Unknown model: {model}")
 
+# =============================================================================
+# core/environment_operators.py 
+# =============================================================================
+from memory_dft.core.environment_operators import (
+    # Physical Constants
+    K_B_EV,
+    K_B_J,
+    H_EV,
+    HBAR_EV,
+    
+    # Thermodynamic Utilities
+    T_to_beta,
+    beta_to_T,
+    thermal_energy,
+    boltzmann_weights,
+    partition_function,
+    compute_entropy,
+    compute_free_energy,
+    
+    # Dislocation
+    Dislocation,
+    compute_peach_koehler_force,
+    
+    # Environment Operators
+    EnvironmentOperator,
+    TemperatureOperator,
+    StressOperator,
+    EnvironmentBuilder,
+)
 
 # =============================================================================
 # Solvers
@@ -700,6 +729,31 @@ __all__ = [
     'create_h2_stretch_path',
     'create_h2_compress_path',
     'demo_h2_comparison',
+
+    # Physical Constants
+    "K_B_EV",
+    "K_B_J", 
+    "H_EV",
+    "HBAR_EV",
+    
+    # Thermodynamic Utilities
+    "T_to_beta",
+    "beta_to_T",
+    "thermal_energy",
+    "boltzmann_weights",
+    "partition_function",
+    "compute_entropy",
+    "compute_free_energy",
+    
+    # Dislocation
+    "Dislocation",
+    "compute_peach_koehler_force",
+    
+    # Environment Operators
+    "EnvironmentOperator",
+    "TemperatureOperator",
+    "StressOperator",
+    "EnvironmentBuilder",
     
     # Visualization
     'HAS_VISUALIZATION',
