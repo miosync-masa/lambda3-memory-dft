@@ -57,6 +57,17 @@ except ImportError:
     VorticityCalculator = None
     HAS_VORTICITY = False
 
+# RDM Calculator（各 Hamiltonian 対応）
+try:
+    from rdm import compute_rdm2, get_rdm_calculator, RDM2Result, SystemType
+    HAS_RDM = True
+except ImportError:
+    compute_rdm2 = None
+    get_rdm_calculator = None
+    RDM2Result = None
+    SystemType = None
+    HAS_RDM = False
+
 
 # =============================================================================
 # Configuration
@@ -281,6 +292,102 @@ class MemoryKernel:
             V_local = cls._compute_vorticity_simple(rdm2, n_orb, max_range=local_range)
         
         return cls.from_vorticity(V_total, V_local, E_xc, use_gpu)
+    
+    @classmethod
+    def from_wavefunction(cls,
+                          psi: np.ndarray,
+                          n_sites: int,
+                          E_xc: float,
+                          system_type: str = 'hubbard',
+                          local_range: int = 2,
+                          use_gpu: bool = True,
+                          **kwargs) -> 'MemoryKernel':
+        """
+        波動関数から直接構築（各種 Hamiltonian 対応）
+        
+        内部で 2-RDM → Vorticity → γ_memory の全フローを実行
+        
+        Args:
+            psi: 正規化された波動関数
+            n_sites: サイト数
+            E_xc: 相関エネルギー
+            system_type: 'hubbard', 'heisenberg', 't-j', ...
+            local_range: 「局所」の定義
+            use_gpu: GPU使用フラグ
+            **kwargs: RDM 計算器への追加引数
+            
+        Example:
+            kernel = MemoryKernel.from_wavefunction(
+                psi, n_sites=6, E_xc=-0.5, system_type='hubbard'
+            )
+        """
+        if not HAS_RDM:
+            raise ImportError("rdm module not available. Use from_rdm2() instead.")
+        
+        # 2-RDM を計算
+        rdm_result = compute_rdm2(psi, system_type, n_sites=n_sites, **kwargs)
+        
+        # from_rdm2 に渡す
+        return cls.from_rdm2(
+            rdm_result.rdm2, 
+            rdm_result.n_orb, 
+            E_xc,
+            local_range=local_range,
+            distance_matrix=rdm_result.distance_matrix,
+            use_gpu=use_gpu
+        )
+    
+    @classmethod
+    def from_pyscf(cls,
+                   mf,
+                   method: str = 'ccsd',
+                   local_range: float = 3.0,
+                   use_gpu: bool = True) -> 'MemoryKernel':
+        """
+        PySCF 計算から直接構築
+        
+        Args:
+            mf: 収束済み PySCF SCF オブジェクト
+            method: 'ccsd' or 'fci'
+            local_range: 局所相関の距離閾値 [Å]
+            use_gpu: GPU使用フラグ
+            
+        Example:
+            from pyscf import gto, scf
+            mol = gto.M(atom='H 0 0 0; H 0 0 1.4', basis='sto-3g')
+            mf = scf.RHF(mol).run()
+            kernel = MemoryKernel.from_pyscf(mf, method='ccsd')
+        """
+        if not HAS_RDM:
+            raise ImportError("rdm module not available")
+        
+        from rdm import PySCFRDM
+        
+        # 2-RDM を計算
+        calc = PySCFRDM()
+        rdm_result = calc.compute_rdm2(mf, method=method)
+        
+        # 相関エネルギーを取得
+        if method == 'ccsd':
+            from pyscf import cc
+            mycc = cc.CCSD(mf)
+            mycc.kernel()
+            E_xc = mycc.e_corr
+        else:
+            from pyscf import fci
+            cisolver = fci.FCI(mf)
+            E_fci, _ = cisolver.kernel()
+            E_xc = E_fci - mf.e_tot
+        
+        # from_rdm2 に渡す
+        return cls.from_rdm2(
+            rdm_result.rdm2,
+            rdm_result.n_orb,
+            E_xc,
+            local_range=local_range,
+            distance_matrix=rdm_result.distance_matrix,
+            use_gpu=use_gpu
+        )
     
     @staticmethod
     def _compute_vorticity_simple(rdm2: np.ndarray, 
