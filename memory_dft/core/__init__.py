@@ -26,6 +26,30 @@ from .sparse_engine_unified import (
     ComputeResult,
 )
 
+# Material Failure Analysis
+from .material_failure import (
+    # Data classes
+    TopologyResult,
+    ThermalTopologyResult,
+    StressTopologyResult,
+    FailurePrediction,
+    
+    # Analyzers
+    ThermalTopologyAnalyzer,
+    StressTopologyAnalyzer,
+    CombinedFailureAnalyzer,
+    
+    # Test suite
+    DSETopologyTest,
+    LocalThermalEnsemble,
+    
+    # Utilities
+    get_xp,
+    to_device,
+    to_host,
+    eigsh_wrapper,
+)
+
 from .memory_kernel import (
     MemoryKernel,
     MemoryKernelConfig,
@@ -111,6 +135,32 @@ __all__ = [
     "HistoryManager",
     "HistoryManagerGPU",
     "LambdaDensityCalculator",
+
+       # Data Classes
+    'TopologyResult',
+    'ThermalTopologyResult',
+    'StressTopologyResult',
+    'FailurePrediction',
+    
+    # Analyzers
+    'ThermalTopologyAnalyzer',
+    'StressTopologyAnalyzer',
+    'CombinedFailureAnalyzer',
+    
+    # Test Suite
+    'DSETopologyTest',
+    'LocalThermalEnsemble',
+    
+    # Utilities
+    'get_xp',
+    'to_device',
+    'to_host',
+    'eigsh_wrapper',
+    
+    # Constants
+    'HAS_CUPY',
+    'HAS_ENV_OPS',
+    'k_B',
     
     # v2.0 Core
     'ThermalEnsemble',
