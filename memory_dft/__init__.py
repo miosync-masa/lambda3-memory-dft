@@ -35,21 +35,16 @@ v0.5.0 Changes:
 
 Structure (Refactored):
   memory_dft/
-  ├── cli/                      # Command-line interface
-  │   ├── __init__.py           # Typer app & command registration
-  │   ├── utils.py              # Shared CLI utilities
-  │   └── commands/             # Individual command modules
   ├── core/
-  │   ├── memory_kernel.py      # 4-layer kernel (field/phys/chem/exclusion)
+  │   ├── memory_kernel.py      # Memory kernel
   │   ├── history_manager.py    # History tracking
+  │   ├── environment_operators.py  
   │   └── sparse_engine_unified.py  # Unified sparse engine (v0.5.0)
   ├── solvers/
-  │   ├── lanczos_memory.py     # Lanczos + memory
-  │   ├── time_evolution.py     # Time evolution
+  │   ├── dse_solver.py     # Lanczos + memory
   │   ├── memory_indicators.py  # Memory quantification
   │   └── chemical_reaction.py  # Surface chemistry solver
   ├── engineering/              
-  │   ├── base.py               # Common Base
   │   └──thermo_mechanical.py   # ThermoMechanical
   ├── holographic/ 
   │   ├── measurement.py        # measurement
@@ -59,7 +54,6 @@ Structure (Refactored):
   │   ├── vorticity.py          # γ decomposition
   │   ├── thermodynamics.py     # Thermal utilities
   │   ├── rdm.py                # 2-RDM analysis
-  │   ├── dislocation_dynamics.py # Dislocation Dynamics
   │   └── topology.py           # Topology Engine 
   ├── interfaces/               # External package interfaces
   │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
@@ -240,53 +234,17 @@ from .core.environment_operators import (
 # Solvers
 # =============================================================================
 
-from .solvers.lanczos_memory import (
-    MemoryLanczosSolver,
-    AdaptiveMemorySolver,
-    lanczos_expm_multiply
+from .solvers.dse_solver import (
+    # Main solver
+    DSESolver,
+    
+    # Result container
+    DSEResult,
+    
+    # Utility
+    lanczos_expm_multiply,
+    quick_dse,
 )
-
-# Optional solvers (may not exist yet)
-try:
-    from .solvers.time_evolution import (
-        TimeEvolutionEngine,
-        EvolutionConfig,
-        EvolutionResult,
-        quick_evolve
-    )
-except ImportError:
-    TimeEvolutionEngine = None
-    EvolutionConfig = None
-    EvolutionResult = None
-    quick_evolve = None
-
-try:
-    from .solvers.memory_indicators import (
-        MemoryIndicator,
-        MemoryMetrics,
-        HysteresisAnalyzer
-    )
-except ImportError:
-    MemoryIndicator = None
-    MemoryMetrics = None
-    HysteresisAnalyzer = None
-
-try:
-    from .solvers.chemical_reaction import (
-        ChemicalReactionSolver,
-        SurfaceHamiltonianEngine,
-        LanczosEvolver,
-        ReactionEvent,
-        ReactionPath,
-        PathResult
-    )
-except ImportError:
-    ChemicalReactionSolver = None
-    SurfaceHamiltonianEngine = None
-    LanczosEvolver = None
-    ReactionEvent = None
-    ReactionPath = None
-    PathResult = None
 
 # =============================================================================
 # Physics
@@ -431,51 +389,6 @@ except ImportError:
     GeometryStep = None
     MemoryKernelDFT = None
 
-# =============================================================================
-# Visualization (optional - requires matplotlib)
-# =============================================================================
-
-try:
-    from .visualization.prl_figures import (
-        fig1_gamma_decomposition,
-        fig2_path_evolution,
-        fig3_memory_comparison,
-        generate_all_prl_figures,
-        COLORS as PRL_COLORS
-    )
-    HAS_VISUALIZATION = True
-except ImportError:
-    HAS_VISUALIZATION = False
-    
-    def fig1_gamma_decomposition(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    def fig2_path_evolution(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    def fig3_memory_comparison(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    def generate_all_prl_figures(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    PRL_COLORS = {}
-
-# =============================================================================
-# Backward Compatibility (DEPRECATED)
-# =============================================================================
-
-import warnings
-
-def _deprecated_import(name, new_location):
-    """Helper for deprecated imports."""
-    warnings.warn(
-        f"{name} is deprecated. Use {new_location} instead.",
-        DeprecationWarning,
-        stacklevel=3
-    )
-
-# Note: ThermalDSESolver and LadderDSESolver have been removed.
-# Use the new examples/ module for similar functionality:
-#   from memory_dft.examples.thermal_path import ThermalPathSolver
-#   from memory_dft.examples.ladder_2d import Ladder2DSolver
-
 
 # =============================================================================
 # __all__
@@ -527,30 +440,16 @@ __all__ = [
     "StressOperator",
     "EnvironmentBuilder",
 
-    # Solvers - Lanczos
-    'MemoryLanczosSolver',
-    'AdaptiveMemorySolver',
+    # Solver
+    'DSESolver',
+    
+    # Result
+    'DSEResult',
+    
+    # Utility
     'lanczos_expm_multiply',
-    
-    # Solvers - Time Evolution
-    'TimeEvolutionEngine',
-    'EvolutionConfig',
-    'EvolutionResult',
-    'quick_evolve',
-    
-    # Solvers - Memory Indicators
-    'MemoryIndicator',
-    'MemoryMetrics',
-    'HysteresisAnalyzer',
-    
-    # Solvers - Chemical Reaction
-    'ChemicalReactionSolver',
-    'SurfaceHamiltonianEngine',
-    'LanczosEvolver',
-    'ReactionEvent',
-    'ReactionPath',
-    'PathResult',
-    
+    'quick_dse',
+  
     # Physics - Stability
     'Lambda3Calculator',
     'LambdaState',
@@ -630,27 +529,4 @@ __all__ = [
     'create_h2_stretch_path',
     'create_h2_compress_path',
     'demo_h2_comparison',
-
-    # Physical Constants
-    "K_B_EV",
-    "K_B_J", 
-    "H_EV",
-    "HBAR_EV",
-    
-    # Thermodynamic Utilities
-    "T_to_beta",
-    "beta_to_T",
-    "thermal_energy",
-    "boltzmann_weights",
-    "partition_function",
-    "compute_entropy",
-    "compute_free_energy",
-    
-    # Visualization
-    'HAS_VISUALIZATION',
-    'fig1_gamma_decomposition',
-    'fig2_path_evolution',
-    'fig3_memory_comparison',
-    'generate_all_prl_figures',
-    'PRL_COLORS',
 ]
