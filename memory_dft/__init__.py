@@ -2,69 +2,6 @@
 Direct Schrödinger Evolution (DSE)
 ==================================
 
-A framework for history-dependent quantum dynamics through
-direct solution of the Schrödinger equation.
-
-DFT erases history. DSE remembers.
-
-Key Insight:
-  Standard DFT: E[ρ(r)]        - Same structure = Same energy
-  DSE:          E[ψ(t)]        - Different history = Different energy
-
-Theoretical Background:
-  Correlation decomposition by distance filtering:
-    γ_total (r=∞) = 2.604   ← Full correlations
-    γ_local (r≤2) = 1.388   ← Markovian sector
-    γ_memory      = 1.216   ← Non-Markovian (46.7%)
-
-  This shows that nearly half of quantum correlations
-  require history-dependent treatment.
-
-Key Results:
-  - gamma_memory = 1.216 (46.7% of correlations are non-Markovian)
-  - Path dependence: 1.59 (adsorption order matters)
-  - Reaction sequence: 2.18 (A->B->C differs from A->C->B)
-  - Thermal path dependence: 2.26 (heating/cooling history matters)
-  - Standard DFT cannot distinguish these paths (history-blind)
-
-v0.5.0 Changes:
-  - Unified SparseEngine consolidation
-  - operators.py, hamiltonian.py, hubbard_engine.py → sparse_engine_unified.py
-  - All models (Heisenberg, Ising, XY, Hubbard, Kitaev) in one place
-  - GPU/CPU automatic backend selection
-
-Structure (Refactored):
-  memory_dft/
-  ├── core/
-  │   ├── memory_kernel.py      # Memory kernel
-  │   ├── history_manager.py    # History tracking
-  │   ├── environment_operators.py  
-  │   └── sparse_engine_unified.py  # Unified sparse engine (v0.5.0)
-  ├── solvers/
-  │   ├── dse_solver.py     # Lanczos + memory
-  │   ├── memory_indicators.py  # Memory quantification
-  │   └── chemical_reaction.py  # Surface chemistry solver
-  ├── engineering/              
-  │   └──thermo_mechanical.py   # ThermoMechanical
-  ├── holographic/ 
-  │   ├── measurement.py        # measurement
-  │   └── dual.py               # AdS/CFT Engine
-  ├── physics/
-  │   ├── lambda3_bridge.py     # Stability diagnostics
-  │   ├── vorticity.py          # γ decomposition
-  │   ├── thermodynamics.py     # Thermal utilities
-  │   ├── rdm.py                # 2-RDM analysis
-  │   └── topology.py           # Topology Engine 
-  ├── interfaces/               # External package interfaces
-  │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
-  └── visualization/
-      └── prl_figures.py        # PRL publication figures
-
-Reference:
-  Lie & Fullwood, PRL 135, 230204 (2025)
-
-DOI: 10.5281/zenodo.18095869
-
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
@@ -96,13 +33,29 @@ from .core.memory_kernel import (
     HistoryEntry,
 )
 
+from .core.history_manager import (
+    StateSnapshot,
+    HistoryManager,
+    HistoryManagerGPU,
+    LambdaDensityCalculator,
+)
+
 from .core.environment_operators import (
+    # 正しい有限温度計算
+    ThermalEnsemble,
+    ThermalObservable,
+    
+    # Observables
+    compute_winding_number,
+    compute_phase_entropy,
+    compute_vorticity,
+    
+    # 場の効果
     EnvironmentBuilder,
-    EnvironmentOperator,
-    TemperatureOperator,
     StressOperator,
     Dislocation,
-    # Thermodynamic utilities
+    
+    # Utilities
     T_to_beta,
     beta_to_T,
     thermal_energy,
@@ -274,15 +227,28 @@ __all__ = [
     'MemoryKernel',
     'MemoryKernelConfig',
     'HistoryEntry',
+
+    # HistoryManager
+    "StateSnapshot",
+    "HistoryManager",
+    "HistoryManagerGPU",
+    "LambdaDensityCalculator",
+
+    # v2.0 Core
+    'ThermalEnsemble',
+    'ThermalObservable',
     
-    # Environment
+    # Observables
+    'compute_winding_number',
+    'compute_phase_entropy',
+    'compute_vorticity',
+    
+    # Environment (場のみ)
     'EnvironmentBuilder',
-    'EnvironmentOperator',
-    'TemperatureOperator',
     'StressOperator',
     'Dislocation',
     
-    # Thermodynamics
+    # Thermodynamic utilities
     'T_to_beta',
     'beta_to_T',
     'thermal_energy',
@@ -291,6 +257,15 @@ __all__ = [
     'compute_entropy',
     'compute_free_energy',
     'compute_heat_capacity',
+    
+    # Constants
+    'K_B_EV',
+    'K_B_J',
+    'H_EV',
+    'HBAR_EV',
+    
+    # Deprecated
+    'TemperatureOperator',
 
     # Solver
     'DSESolver',
