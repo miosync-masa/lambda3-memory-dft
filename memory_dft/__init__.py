@@ -50,6 +50,9 @@ Structure (Refactored):
   │   ├── time_evolution.py     # Time evolution
   │   ├── memory_indicators.py  # Memory quantification
   │   └── chemical_reaction.py  # Surface chemistry solver
+  ├── engineering/              
+  │   ├── base.py               # Common Base
+  │   └──thermo_mechanical.py   # ThermoMechanical
   ├── holographic/  
   │   └── dual.py               # AdS/CFT Engine
   ├── physics/
@@ -57,6 +60,7 @@ Structure (Refactored):
   │   ├── vorticity.py          # γ decomposition
   │   ├── thermodynamics.py     # Thermal utilities
   │   ├── rdm.py                # 2-RDM analysis
+  │   ├──  dislocation_dynamics.py # Dislocation Dynamics
   │   └── topology.py           # Topology Engine 
   ├── interfaces/               # External package interfaces
   │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
@@ -71,7 +75,7 @@ DOI: 10.5281/zenodo.18095869
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # =============================================================================
 # Core Components
@@ -338,6 +342,13 @@ from .physics.topology import (
     TopologyEngineExtended,
 )
 
+from .physics.dislocation_dynamics import (
+        Dislocation,              # 転位データ構造
+        DislocationDynamics,      # 転位動力学エンジン
+        plot_pileup_results,      # パイルアップ結果プロット
+        plot_hall_petch_dd,       # Hall-Petch プロット
+    )
+
 # =============================================================================
 # Holographic (optional - requires matplotlib)
 # =============================================================================
@@ -383,6 +394,23 @@ except ImportError:
     
     MeasurementRecord = None
     HolographicMeasurementResult = None
+
+# =============================================================================
+#  Engineering Solvers
+# =============================================================================
+
+from .engineering.base import (
+    EngineeringSolver,
+    SolverResult,
+    MaterialParams,
+    ProcessConditions,
+)
+
+from .engineering.thermo_mechanical import (
+    ThermoMechanicalSolver,
+    ThermoMechanicalResult,
+    HeatTreatmentType,
+)
   
 # =============================================================================
 # Interfaces (optional - requires PySCF)
@@ -610,6 +638,23 @@ __all__ = [
     'HolographicMeasurement',
     'quick_holographic_measurement',
     'HAS_HOLOGRAPHIC',
+
+    # EngineeringSolver
+    'EngineeringSolver',
+    'SolverResult',
+    'MaterialParams',
+    'ProcessConditions',
+    
+    # Thermo-Mechanical
+    'ThermoMechanicalSolver',
+    'ThermoMechanicalResult',
+    'HeatTreatmentType',
+
+    # Dislocation Dynamics
+    'Dislocation',
+    'DislocationDynamics',
+    'plot_pileup_results',
+    'plot_hall_petch_dd',
     
     # Interfaces - PySCF
     'HAS_PYSCF',
