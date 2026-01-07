@@ -412,21 +412,34 @@ except ImportError:
     HolographicMeasurementResult = None
 
 # =============================================================================
-#  Engineering Solvers
+#  Engineering Solvers (optional)
 # =============================================================================
-
-from .engineering.base import (
-    EngineeringSolver,
-    SolverResult,
-    MaterialParams,
-    ProcessConditions,
-)
-
-from .engineering.thermo_mechanical import (
-    ThermoMechanicalSolver,
-    ThermoMechanicalResult,
-    HeatTreatmentType,
-)
+try:
+    from .engineering.base import (
+        EngineeringSolver,
+        SolverResult,
+        MaterialParams,
+        ProcessConditions,
+    )
+    from .engineering.thermo_mechanical import (
+        ThermoMechanicalSolver,
+        ThermoMechanicalResult,
+        HeatTreatmentType,
+    )
+    HAS_ENGINEERING = True
+except ImportError:
+    HAS_ENGINEERING = False
+    
+    def ThermoMechanicalSolver(*args, **kwargs):
+        raise ImportError("engineering module not available")
+    def EngineeringSolver(*args, **kwargs):
+        raise ImportError("engineering module not available")
+    
+    SolverResult = None
+    MaterialParams = None
+    ProcessConditions = None
+    ThermoMechanicalResult = None
+    HeatTreatmentType = None
   
 # =============================================================================
 # Interfaces (optional - requires PySCF)
@@ -660,6 +673,8 @@ __all__ = [
     'SolverResult',
     'MaterialParams',
     'ProcessConditions',
+    'HAS_ENGINEERING',
+    'EngineeringSolver',
     
     # Thermo-Mechanical
     'ThermoMechanicalSolver',
