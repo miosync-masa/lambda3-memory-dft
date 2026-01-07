@@ -104,11 +104,6 @@ from .core.sparse_engine_unified import (
     HubbardEngineCompat,
 )
 
-# Backward compatibility aliases
-HubbardEngine = HubbardEngineCompat
-HubbardResult = ComputeResult
-SpinOperators = SpinOperatorsCompat
-
 # =============================================================================
 # Lattice Geometry (now in sparse_engine_unified)
 # =============================================================================
@@ -120,85 +115,6 @@ from .core.sparse_engine_unified import (
     create_ladder,
     create_square_lattice,
 )
-
-# =============================================================================
-# Backward Compatibility - Operators & Hamiltonian
-# =============================================================================
-
-def pauli_matrices():
-    """Return Pauli matrices (σx, σy, σz)."""
-    import numpy as np
-    sx = np.array([[0, 0.5], [0.5, 0]], dtype=np.complex128)
-    sy = np.array([[0, -0.5j], [0.5j, 0]], dtype=np.complex128)
-    sz = np.array([[0.5, 0], [0, -0.5]], dtype=np.complex128)
-    return sx, sy, sz
-
-
-def create_spin_operators(n_sites, use_gpu=False):
-    """Create spin operators for n_sites."""
-    return SpinOperatorsCompat(n_sites, use_gpu=use_gpu)
-
-
-def compute_total_spin(psi, ops):
-    """Compute total spin ⟨S²⟩."""
-    if hasattr(ops, '_engine'):
-        return ops._engine.compute_total_spin(psi)
-    raise ValueError("ops must be SpinOperatorsCompat")
-
-
-def compute_magnetization(psi, ops):
-    """Compute magnetization ⟨Sz⟩/N."""
-    if hasattr(ops, '_engine'):
-        return ops._engine.compute_magnetization(psi)
-    raise ValueError("ops must be SpinOperatorsCompat")
-
-
-def compute_correlation(psi, ops, i, j, component='Z'):
-    """Compute spin-spin correlation ⟨Si·Sj⟩."""
-    if hasattr(ops, '_engine'):
-        return ops._engine.compute_correlation(psi, i, j, component)
-    raise ValueError("ops must be SpinOperatorsCompat")
-
-
-class HamiltonianBuilder:
-    """
-    Backward compatibility wrapper for HamiltonianBuilder.
-    
-    New code should use SparseEngine directly:
-        engine = SparseEngine(n_sites)
-        H = engine.build_heisenberg(bonds, J=1.0)
-    """
-    def __init__(self, lattice, ops):
-        self._engine = ops._engine if hasattr(ops, '_engine') else \
-                       SparseEngine(lattice.N_spins, use_gpu=False, verbose=False)
-        self._bonds = lattice.bonds_nn if hasattr(lattice, 'bonds_nn') else lattice.bonds
-    
-    def heisenberg(self, J=1.0, Jz=None):
-        return self._engine.build_heisenberg(self._bonds, J=J, Jz=Jz, split_KV=False)
-    
-    def xy(self, J=1.0):
-        return self._engine.build_xy(self._bonds, J=J)
-    
-    def ising(self, J=1.0, h=0.0):
-        return self._engine.build_ising(self._bonds, J=J, h=h, split_KV=False)
-    
-    def kitaev_rect(self, Kx=1.0, Ky=0.8, Kz_diag=0.5):
-        return self._engine.build_kitaev_rect(Kx=Kx, Ky=Ky, Kz_diag=Kz_diag)
-
-
-def build_hamiltonian(model, lattice, ops, **kwargs):
-    """Build Hamiltonian for given model."""
-    builder = HamiltonianBuilder(lattice, ops)
-    if model == 'heisenberg':
-        return builder.heisenberg(**kwargs)
-    elif model == 'xy':
-        return builder.xy(**kwargs)
-    elif model == 'ising':
-        return builder.ising(**kwargs)
-    elif model == 'kitaev':
-        return builder.kitaev_rect(**kwargs)
-    else:
-        raise ValueError(f"Unknown model: {model}")
 
 # =============================================================================
 # core/environment_operators.py 
@@ -257,14 +173,14 @@ from .physics.lambda3_bridge import (
     StabilityPhase
 )
 
-from .vorticity import (
+from .physics.vorticity import (
     VorticityCalculator,
     VorticityResult,
     GammaExtractor,
     compute_orbital_distance_matrix,
 )
 
-from .rdm import (
+from .physics.rdm import (
     RDMCalculator,
     RDM2Result,
     SystemType,
@@ -273,23 +189,6 @@ from .rdm import (
     PySCFRDM,
     get_rdm_calculator,
     compute_rdm2,
-)
-
-# Thermodynamics
-from .physics.thermodynamics import (
-    K_B_EV,
-    T_to_beta,
-    beta_to_T,
-    thermal_energy,
-    boltzmann_weights,
-    partition_function,
-    thermal_expectation,
-    thermal_expectation_zero_T,
-    compute_entropy,
-    compute_free_energy,
-    compute_heat_capacity,
-    thermal_density_matrix,
-    sample_thermal_state,
 )
 
 # Topology (NEW!)
@@ -358,37 +257,22 @@ except ImportError:
     HolographicMeasurementResult = None
 
 # =============================================================================
-# Interfaces (optional - requires PySCF)
+# Interfaces
 # =============================================================================
 try:
-    from .interfaces import (
+    from .interfaces.pyscf_interface import (
         DSECalculator,
-        PathResult as DFTPathResult,
-        ComparisonResult,
         GeometryStep,
-        MemoryKernelDFT,
+        SinglePointResult,
+        PathResult,
+        ComparisonResult,
         create_h2_stretch_path,
         create_h2_compress_path,
-        demo_h2_comparison,
+        create_cyclic_path,
         HAS_PYSCF,
     )
 except ImportError:
     HAS_PYSCF = False
-    
-    def DSECalculator(*args, **kwargs):
-        raise ImportError("PySCF required: pip install pyscf")
-    def create_h2_stretch_path(*args, **kwargs):
-        raise ImportError("PySCF required: pip install pyscf")
-    def create_h2_compress_path(*args, **kwargs):
-        raise ImportError("PySCF required: pip install pyscf")
-    def demo_h2_comparison(*args, **kwargs):
-        raise ImportError("PySCF required: pip install pyscf")
-    
-    DFTPathResult = None
-    ComparisonResult = None
-    GeometryStep = None
-    MemoryKernelDFT = None
-
 
 # =============================================================================
 # __all__
@@ -402,6 +286,8 @@ __all__ = [
     'MemoryKernel',
     'MemoryKernelConfig',
     'HistoryEntry',
+  
+    # Core - HistoryManager
     'HistoryManager',
     'HistoryManagerGPU',
     'StateSnapshot',
@@ -413,20 +299,6 @@ __all__ = [
     'ComputeResult',
     'SparseHamiltonianEngine',
     
-    # Core - Backward Compatibility
-    'HubbardEngine',
-    'HubbardEngineCompat',
-    'HubbardResult',
-    'SpinOperators',
-    'SpinOperatorsCompat',
-    'pauli_matrices',
-    'create_spin_operators',
-    'compute_total_spin',
-    'compute_magnetization',
-    'compute_correlation',
-    'HamiltonianBuilder',
-    'build_hamiltonian',
-    
     # Core - Lattice
     'LatticeGeometry2D',
     'LatticeGeometry',
@@ -434,6 +306,25 @@ __all__ = [
     'create_ladder',
     'create_square_lattice',
 
+    # Physical Constants
+    'K_B_EV',
+    'K_B_J',
+    'H_EV',
+    'HBAR_EV',
+    
+    # Thermodynamic Utilities
+    'T_to_beta',
+    'beta_to_T',
+    'thermal_energy',
+    'boltzmann_weights',
+    'partition_function',
+    'compute_entropy',
+    'compute_free_energy',
+   
+    # Dislocation
+    'Dislocation',
+    'compute_peach_koehler_force',
+  
     # Environment Operators
     "EnvironmentOperator",
     "TemperatureOperator",
@@ -472,21 +363,6 @@ __all__ = [
     'get_rdm_calculator',
     'compute_rdm2',
     
-    # Physics - Thermodynamics
-    'K_B_EV',
-    'T_to_beta',
-    'beta_to_T',
-    'thermal_energy',
-    'boltzmann_weights',
-    'partition_function',
-    'thermal_expectation',
-    'thermal_expectation_zero_T',
-    'compute_entropy',
-    'compute_free_energy',
-    'compute_heat_capacity',
-    'thermal_density_matrix',
-    'sample_thermal_state',
-    
     # Topology (NEW!)
     'TopologyResult',
     'ReconnectionEvent',
@@ -520,13 +396,13 @@ __all__ = [
     'HAS_HOLOGRAPHIC',
     
     # Interfaces - PySCF
-    'HAS_PYSCF',
     'DSECalculator',
-    'DFTPathResult',
-    'ComparisonResult',
     'GeometryStep',
-    'MemoryKernelDFT',
+    'SinglePointResult',
+    'PathResult',
+    'ComparisonResult',
     'create_h2_stretch_path',
     'create_h2_compress_path',
-    'demo_h2_comparison',
+    'create_cyclic_path',
+    'HAS_PYSCF',
 ]
