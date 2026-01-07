@@ -32,6 +32,13 @@ from .memory_kernel import (
     HistoryEntry,
 )
 
+from .history_manager import (
+    StateSnapshot,
+    HistoryManager,
+    HistoryManagerGPU,
+    LambdaDensityCalculator,
+)
+
 from .environment_operators import (
     # =========================================================================
     # v2.0 NEW: ThermalEnsemble (正しい有限温度計算)
@@ -98,6 +105,12 @@ __all__ = [
     'MemoryKernel',
     'MemoryKernelConfig',
     'HistoryEntry',
+    
+    # HistoryManager
+    "StateSnapshot",
+    "HistoryManager",
+    "HistoryManagerGPU",
+    "LambdaDensityCalculator",
     
     # v2.0 Core
     'ThermalEnsemble',
