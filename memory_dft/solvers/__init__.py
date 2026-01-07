@@ -1,20 +1,26 @@
+# =============================================================================
+# memory_dft/solvers/__init__.py
+# =============================================================================
+
 """
-Memory-DFT Solvers
-==================
+Memory-DFT Solvers Module
+=========================
 
-Numerical solvers for Memory-DFT simulations.
+DSE (Direct Schrödinger Evolution) ソルバーとメモリ指標
 
-Modules:
-  - lanczos_memory: Lanczos-based time evolution with memory
-  - time_evolution: General time evolution engine
-  - memory_indicators: Memory quantification metrics
-  - chemical_reaction: Surface chemistry solver
+【DSE の本質】
+  標準量子力学: iℏ ∂ψ/∂t = H ψ（Markovian）
+  DSE:         iℏ ∂ψ/∂t = H ψ + ∫ K(t-τ) F[ψ(τ)] dτ（Non-Markovian）
 
-Note:
-  ThermalDSESolver and LadderDSESolver have been refactored.
-  - Thermal functions: Use memory_dft.physics.thermodynamics
-  - Lattice/Operators/Hamiltonian: Use memory_dft.core.*
-  - Example code: See memory_dft.examples.*
+【使用例】
+  from memory_dft.solvers import DSESolver, DSEResult, MemoryIndicator
+  
+  solver = DSESolver(H_K, H_V, gamma_memory=1.2, eta=0.1)
+  result1 = solver.run(psi0, t_end=10.0)
+  result2 = solver.run(psi0_alt, t_end=10.0)
+  
+  metrics = MemoryIndicator.from_dse_results(result1, result2)
+  print(metrics.summary())
 
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
@@ -31,27 +37,26 @@ from .dse_solver import (
     quick_dse,
 )
 
-
 from .memory_indicators import (
-    MemoryIndicator,
+    # Metrics container
     MemoryMetrics,
-    HysteresisAnalyzer
+    
+    # Indicator calculator
+    MemoryIndicator,
+    
+    # Hysteresis analysis
+    HysteresisAnalyzer,
 )
 
-
 __all__ = [
-    # Memory Indicators
-    'MemoryIndicator',
-    'MemoryMetrics',
-    'HysteresisAnalyzer',
-
     # Solver
     'DSESolver',
-    
-    # Result
     'DSEResult',
-    
-    # Utility
     'lanczos_expm_multiply',
     'quick_dse',
+    
+    # Memory indicators
+    'MemoryMetrics',
+    'MemoryIndicator',
+    'HysteresisAnalyzer',
 ]
