@@ -958,16 +958,23 @@ class SparseEngine:
         geom.Ly = Ly
         
         return geom
-    
+
+  
+    # =========================================================================
+    # 修正2: build_hubbard_with_defects（per-bond hopping 実装）
+    # =========================================================================
+
     def build_hubbard_with_defects(self,
-                                    geometry: 'SystemGeometry',
-                                    t: float = 1.0,
-                                    U: float = 2.0,
-                                    t_weak: float = None,
-                                    vacancy_potential: float = 100.0,
-                                    strain_coupling: float = 0.1) -> Tuple:
+                                geometry: 'SystemGeometry',
+                                t: float = 1.0,
+                                U: float = 2.0,
+                                t_weak: float = None,
+                                vacancy_potential: float = 100.0,
+                                strain_coupling: float = 0.1) -> Tuple:
         """
         Build Hubbard Hamiltonian with defects and strain.
+        
+        Per-bond hopping 完全実装！
         
         Args:
             geometry: SystemGeometry with defect info
@@ -978,65 +985,74 @@ class SparseEngine:
             strain_coupling: dt/dr strain coupling
             
         Returns:
-            H_K, H_V: Kinetic and potential parts
-            
-        Physics:
-            - Vacancies: site_potential = +large (blocks electrons)
-            - Weak bonds: t_weak < t (easier to break)
-            - Strain: t(r) = t * exp(-strain_coupling * Δr)
+            H_K, H_V: Kinetic and potential parts (CuPy sparse)
         """
         if t_weak is None:
             t_weak = 0.3 * t
         
         bonds = geometry.bonds
         vacancies = getattr(geometry, 'vacancies', [])
-        weak_bonds = getattr(geometry, 'weak_bonds', [])
+        weak_bonds_list = getattr(geometry, 'weak_bonds', [])
         positions = geometry.positions
         
-        # Compute bond lengths for strain
-        bond_lengths = []
-        for (i, j) in bonds:
-            if positions is not None:
-                dr = np.linalg.norm(positions[i] - positions[j])
-            else:
-                dr = 1.0
-            bond_lengths.append(dr)
-        
-        # Site potentials (vacancy sites get large potential)
-        site_potentials = [0.0] * geometry.n_sites
-        for v in vacancies:
-            if v < len(site_potentials):
-                site_potentials[v] = vacancy_potential
-        
-        # Build bond-dependent hopping
+        # =====================================================
+        # Compute per-bond hopping values
+        # =====================================================
         t_values = []
         for idx, (i, j) in enumerate(bonds):
-            if (i, j) in weak_bonds or (j, i) in weak_bonds:
+            if (i, j) in weak_bonds_list or (j, i) in weak_bonds_list:
                 t_ij = t_weak
             else:
-                # Strain-dependent hopping
-                dr = bond_lengths[idx] if bond_lengths else 1.0
-                t_ij = t * np.exp(-strain_coupling * (dr - 1.0))
+                if positions is not None:
+                    dr = np.linalg.norm(positions[i] - positions[j])
+                    t_ij = t * np.exp(-strain_coupling * (dr - 1.0))
+                else:
+                    t_ij = t
             t_values.append(t_ij)
         
-        # Use existing build_hubbard with site_potentials
-        H_K, H_V = self.build_hubbard(
-            bonds,
-            t=t,
-            U=U,
-            site_potentials=site_potentials,
-            bond_lengths=bond_lengths if strain_coupling > 0 else None,
-            split_KV=True
-        )
+        # =====================================================
+        # Build H_K with per-bond hopping
+        # =====================================================
+        H_K = None
         
-        # Override with per-bond t values (requires modifying H_K)
-        # For now, use average t approach
-        # TODO: Implement per-bond hopping in build_hubbard
+        for idx, (i, j) in enumerate(bonds):
+            t_ij = t_values[idx]
+            
+            # Hopping: -t_ij * (Sp_i Sm_j + Sm_i Sp_j)
+            term_hop = -t_ij * (self.Sp[i] @ self.Sm[j] + self.Sm[i] @ self.Sp[j])
+            
+            if H_K is None:
+                H_K = term_hop
+            else:
+                H_K = H_K + term_hop
+        
+        # =====================================================
+        # Build H_V with density-density interaction
+        # =====================================================
+        H_V = None
+        
+        for (i, j) in bonds:
+            n_i = self.Sz[i] + 0.5 * self._build_site_operator(self.I_single, i)
+            n_j = self.Sz[j] + 0.5 * self._build_site_operator(self.I_single, j)
+            term_U = U * n_i @ n_j
+            
+            if H_V is None:
+                H_V = term_U
+            else:
+                H_V = H_V + term_U
+        
+        # =====================================================
+        # Add vacancy potentials
+        # =====================================================
+        for v in vacancies:
+            if v < self.n_sites:
+                n_v = self.Sz[v] + 0.5 * self._build_site_operator(self.I_single, v)
+                H_V = H_V + vacancy_potential * n_v
         
         return H_K, H_V
     
     # =========================================================================
-    # Local λ Analysis (GPU-compatible)
+    # compute_local_lambda（CuPy対応 + 物理的に正しい実装）
     # =========================================================================
     
     def compute_local_lambda(self,
@@ -1047,42 +1063,79 @@ class SparseEngine:
         """
         Compute local λ = K/|V| for each site.
         
-        This identifies where the system is closest to instability.
-        High local λ → likely failure point.
+        物理的な実装：
+          K_site = サイトに関わるホッピング項の期待値（ボンド寄与の半分）
+          V_site = サイトに関わる密度-密度相互作用の期待値（ボンド寄与の半分）
+          λ_site = |K_site| / |V_site|
+        
+        H_V = Σ_{<i,j>} U × n_i × n_j なので、
+        V_site = Σ_{j∈neighbors(site)} U × ⟨n_site × n_j⟩ / 2
         
         Args:
-            psi: Wavefunction (CuPy or NumPy)
+            psi: Wavefunction (CuPy array)
             H_K, H_V: Hamiltonian parts (CuPy sparse)
             geometry: System geometry
             
         Returns:
-            lambda_local: Array of λ values per site (NumPy)
+            lambda_local: Array of λ values per site (NumPy for output)
         """
-        xp = self.xp
+        xp = self.xp  # CuPy or NumPy
         n_sites = geometry.n_sites
+        bonds = geometry.bonds
         
-        # Global λ for reference
-        K_total = float(xp.real(xp.vdot(psi, H_K @ psi)))
-        V_total = float(xp.real(xp.vdot(psi, H_V @ psi)))
-        lambda_global = abs(K_total / V_total) if abs(V_total) > 1e-10 else 1.0
+        # Build neighbor map
+        neighbors = {i: [] for i in range(n_sites)}
+        for (i, j) in bonds:
+            neighbors[i].append(j)
+            neighbors[j].append(i)
         
-        # Local λ via site-projected operators
+        # Output array (NumPy for compatibility)
         lambda_local = np.zeros(n_sites)
         
         for site in range(n_sites):
-            # Use cached Sz operator (already CuPy sparse!)
-            Sz_site = self.Sz[site]  # ← ここが修正点！
+            # =====================================================
+            # K_site: kinetic energy from connected bonds
+            # =====================================================
+            # K = -t Σ (c†_i c_j + h.c.) = -t Σ (Sp_i Sm_j + Sm_i Sp_j)
+            # K_site = Σ_{j∈neighbors} ⟨hop_ij⟩ / 2  (each bond counted twice)
             
-            # Site density
-            Sz2 = Sz_site @ Sz_site
-            n_site = float(xp.real(xp.vdot(psi, Sz2 @ psi)))
+            K_site = 0.0
+            for j in neighbors[site]:
+                # Hopping operator for this bond
+                hop_ij = self.Sp[site] @ self.Sm[j] + self.Sm[site] @ self.Sp[j]
+                K_site += float(xp.real(xp.vdot(psi, hop_ij @ psi)))
             
-            if n_site > 1e-10:
-                lambda_local[site] = lambda_global * (1.0 + 0.1 * (site - n_sites/2) / n_sites)
+            K_site = abs(K_site) / 2.0  # Each bond counted from both ends
+            
+            # =====================================================
+            # V_site: potential energy from connected bonds
+            # =====================================================
+            # V = U Σ_{<i,j>} n_i n_j
+            # V_site = Σ_{j∈neighbors} U × ⟨n_site × n_j⟩ / 2
+            
+            V_site = 0.0
+            n_site_op = self.Sz[site] + 0.5 * self._build_site_operator(self.I_single, site)
+            
+            for j in neighbors[site]:
+                n_j_op = self.Sz[j] + 0.5 * self._build_site_operator(self.I_single, j)
+                nn_ij = n_site_op @ n_j_op
+                V_site += float(xp.real(xp.vdot(psi, nn_ij @ psi)))
+            
+            V_site = abs(V_site) / 2.0  # Each bond counted from both ends
+            
+            # =====================================================
+            # λ_site = K / |V|
+            # =====================================================
+            if V_site > 1e-10:
+                lambda_local[site] = K_site / V_site
             else:
-                lambda_local[site] = 0.0
+                # V_site ≈ 0: fallback to global λ
+                K_total = float(xp.real(xp.vdot(psi, H_K @ psi)))
+                V_total = float(xp.real(xp.vdot(psi, H_V @ psi)))
+                lambda_local[site] = abs(K_total / V_total) if abs(V_total) > 1e-10 else 1.0
         
         return lambda_local
+    
     
     def find_critical_sites(self,
                             lambda_local: np.ndarray,
@@ -1090,20 +1143,10 @@ class SparseEngine:
                             top_n: int = 5) -> List[Tuple[int, float]]:
         """
         Find sites closest to instability.
-        
-        Args:
-            lambda_local: Local λ array from compute_local_lambda
-            lambda_critical: Threshold for instability
-            top_n: Return top N critical sites
-            
-        Returns:
-            List of (site_index, lambda_value) sorted by λ descending
         """
         indexed = [(i, lam) for i, lam in enumerate(lambda_local)]
         indexed.sort(key=lambda x: x[1], reverse=True)
-        
         critical = [(i, lam) for i, lam in indexed[:top_n] if lam > lambda_critical * 0.5]
-        
         return critical
 
     # =========================================================================
