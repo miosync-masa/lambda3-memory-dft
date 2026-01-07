@@ -342,12 +342,28 @@ from .physics.topology import (
     TopologyEngineExtended,
 )
 
-from .physics.dislocation_dynamics import (
+# =============================================================================
+# Dislocation Dynamics (optional - requires matplotlib for plots)
+# =============================================================================
+try:
+    from .physics.dislocation_dynamics import (
         Dislocation,              # 転位データ構造
         DislocationDynamics,      # 転位動力学エンジン
         plot_pileup_results,      # パイルアップ結果プロット
         plot_hall_petch_dd,       # Hall-Petch プロット
     )
+    HAS_DISLOCATION = True
+except ImportError:
+    HAS_DISLOCATION = False
+    
+    def DislocationDynamics(*args, **kwargs):
+        raise ImportError("dislocation_dynamics not available")
+    def plot_pileup_results(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    def plot_hall_petch_dd(*args, **kwargs):
+        raise ImportError("matplotlib required: pip install matplotlib")
+    
+    Dislocation = None
 
 # =============================================================================
 # Holographic (optional - requires matplotlib)
