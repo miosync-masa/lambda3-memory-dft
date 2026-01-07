@@ -130,16 +130,14 @@ class ThermoMechanicalSolver(EngineeringSolver):
                  n_sites: int = 16,
                  Lx: int = None,
                  Ly: int = None,
-                 use_gpu: bool = False,
                  use_memory: bool = True,
                  verbose: bool = True):
-        """Initialize thermo-mechanical solver."""
+        """Initialize thermo-mechanical solver (GPU only)."""
         super().__init__(
             material=material,
             n_sites=n_sites,
             Lx=Lx,
             Ly=Ly,
-            use_gpu=use_gpu,
             use_memory=use_memory,
             verbose=verbose
         )
@@ -521,7 +519,7 @@ class ThermoMechanicalSolver(EngineeringSolver):
                     print(f"  Skip: n_sites={self.n_sites} > 16")
                 continue
             
-            self.engine = SparseEngine(self.n_sites, use_gpu=self.use_gpu, verbose=False)
+            self.engine = SparseEngine(self.n_sites, use_gpu=True, verbose=False)
             self.geometry = None
             
             if self.history_manager is not None:
@@ -611,8 +609,7 @@ def main():
         Lx=4,
         Ly=3,
         verbose=True,
-        use_memory=True,
-        use_gpu=HAS_CUPY
+        use_memory=True
     )
     
     print("\n" + "-" * 40)
