@@ -80,34 +80,18 @@ __version__ = "0.6.0"
 # Core Components
 # =============================================================================
 
-# Memory Kernels
 from .core.memory_kernel import (
-    MemoryKernelBase,
-    PowerLawKernel,
-    StretchedExpKernel,
-    StepKernel,
-    ExclusionKernel,
-    CompositeMemoryKernel,
-    CompositeMemoryKernelGPU,
-    KernelWeights,
-    CatalystMemoryKernel,
-    CatalystEvent,
-    SimpleMemoryKernel
+    MemoryKernel,
+    MemoryKernelConfig,
+    HistoryEntry,
 )
 
-# Repulsive Kernel (v0.5.0 - now in memory_kernel.py)
-from .core import RepulsiveMemoryKernel
-
-# History Manager (optional)
-try:
-    from .core import (
-        HistoryManager,
-        HistoryManagerGPU,
-        LambdaDensityCalculator,
-        StateSnapshot
-    )
-except ImportError:
-    pass  # Use placeholders from core
+from .core.history_manager import (
+    HistoryManager,
+    HistoryManagerGPU,
+    StateSnapshot,
+    LambdaDensityCalculator,
+)
 
 # =============================================================================
 # Unified Sparse Engine (v0.5.0)
@@ -225,7 +209,7 @@ def build_hamiltonian(model, lattice, ops, **kwargs):
 # =============================================================================
 # core/environment_operators.py 
 # =============================================================================
-from memory_dft.core.environment_operators import (
+from .core.environment_operators import (
     # Physical Constants
     K_B_EV,
     K_B_J,
@@ -315,11 +299,22 @@ from .physics.lambda3_bridge import (
     StabilityPhase
 )
 
-from .physics.vorticity import (
+from .vorticity import (
     VorticityCalculator,
     VorticityResult,
     GammaExtractor,
-    MemoryKernelFromGamma
+    compute_orbital_distance_matrix,
+)
+
+from .rdm import (
+    RDMCalculator,
+    RDM2Result,
+    SystemType,
+    HubbardRDM,
+    HeisenbergRDM,
+    PySCFRDM,
+    get_rdm_calculator,
+    compute_rdm2,
 )
 
 # Thermodynamics
@@ -337,19 +332,6 @@ from .physics.thermodynamics import (
     compute_heat_capacity,
     thermal_density_matrix,
     sample_thermal_state,
-)
-
-# Two-Particle Reduced Density Matrix
-from .physics.rdm import (
-    RDM2Result,
-    compute_2rdm,
-    compute_2rdm_with_ops,
-    compute_density_density_correlation,
-    compute_connected_correlation,
-    compute_correlation_matrix,
-    filter_by_distance,
-    from_pyscf_rdm2,
-    to_pyscf_rdm2,
 )
 
 # Topology (NEW!)
@@ -370,28 +352,6 @@ from .physics.topology import (
     TopologyEngineExtended,
 )
 
-# =============================================================================
-# Dislocation Dynamics (optional - requires matplotlib for plots)
-# =============================================================================
-try:
-    from .physics.dislocation_dynamics import (
-        Dislocation,              # 転位データ構造
-        DislocationDynamics,      # 転位動力学エンジン
-        plot_pileup_results,      # パイルアップ結果プロット
-        plot_hall_petch_dd,       # Hall-Petch プロット
-    )
-    HAS_DISLOCATION = True
-except ImportError:
-    HAS_DISLOCATION = False
-    
-    def DislocationDynamics(*args, **kwargs):
-        raise ImportError("dislocation_dynamics not available")
-    def plot_pileup_results(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    def plot_hall_petch_dd(*args, **kwargs):
-        raise ImportError("matplotlib required: pip install matplotlib")
-    
-    Dislocation = None
 
 # =============================================================================
 # Holographic (optional - requires matplotlib)
@@ -438,41 +398,6 @@ except ImportError:
     
     MeasurementRecord = None
     HolographicMeasurementResult = None
-
-# =============================================================================
-#  Engineering Solvers (optional)
-# =============================================================================
-try:
-    from .engineering.base import (
-        EngineeringSolver,
-        SolverResult,
-        MaterialParams,
-        ProcessConditions,
-        create_material,
-    )
-    from .engineering.thermo_mechanical import (
-        ThermoMechanicalSolver,
-        ThermoMechanicalResult,
-        HeatTreatmentType,
-        HallPetchResult,
-    )
-    HAS_ENGINEERING = True
-except ImportError:
-    HAS_ENGINEERING = False
-    
-    def ThermoMechanicalSolver(*args, **kwargs):
-        raise ImportError("engineering module not available")
-    def EngineeringSolver(*args, **kwargs):
-        raise ImportError("engineering module not available")
-    def create_material(*args, **kwargs):
-        raise ImportError("engineering module not available")
-    
-    SolverResult = None
-    MaterialParams = None
-    ProcessConditions = None
-    ThermoMechanicalResult = None
-    HeatTreatmentType = None
-    HallPetchResult = None
 
 # =============================================================================
 # Interfaces (optional - requires PySCF)
@@ -606,7 +531,13 @@ __all__ = [
     'create_chain',
     'create_ladder',
     'create_square_lattice',
-    
+
+    # Environment Operators
+    "EnvironmentOperator",
+    "TemperatureOperator",
+    "StressOperator",
+    "EnvironmentBuilder",
+
     # Solvers - Lanczos
     'MemoryLanczosSolver',
     'AdaptiveMemorySolver',
@@ -642,6 +573,16 @@ __all__ = [
     'VorticityResult',
     'GammaExtractor',
     'MemoryKernelFromGamma',
+
+    # RDM
+    'RDMCalculator',
+    'RDM2Result',
+    'SystemType',
+    'HubbardRDM',
+    'HeisenbergRDM',
+    'PySCFRDM',
+    'get_rdm_calculator',
+    'compute_rdm2',
     
     # Physics - Thermodynamics
     'K_B_EV',
@@ -658,17 +599,6 @@ __all__ = [
     'thermal_density_matrix',
     'sample_thermal_state',
     
-    # Physics - 2-RDM
-    'RDM2Result',
-    'compute_2rdm',
-    'compute_2rdm_with_ops',
-    'compute_density_density_correlation',
-    'compute_connected_correlation',
-    'compute_correlation_matrix',
-    'filter_by_distance',
-    'from_pyscf_rdm2',
-    'to_pyscf_rdm2',
-
     # Topology (NEW!)
     'TopologyResult',
     'ReconnectionEvent',
@@ -713,12 +643,6 @@ __all__ = [
     'HeatTreatmentType',
     'HallPetchResult',
     
-    # Dislocation Dynamics
-    'Dislocation',
-    'DislocationDynamics',
-    'plot_pileup_results',
-    'plot_hall_petch_dd',
-    
     # Interfaces - PySCF
     'HAS_PYSCF',
     'DSECalculator',
@@ -744,16 +668,6 @@ __all__ = [
     "partition_function",
     "compute_entropy",
     "compute_free_energy",
-    
-    # Dislocation
-    "Dislocation",
-    "compute_peach_koehler_force",
-    
-    # Environment Operators
-    "EnvironmentOperator",
-    "TemperatureOperator",
-    "StressOperator",
-    "EnvironmentBuilder",
     
     # Visualization
     'HAS_VISUALIZATION',
