@@ -33,12 +33,29 @@ from .memory_kernel import (
 )
 
 from .environment_operators import (
+    # =========================================================================
+    # v2.0 NEW: ThermalEnsemble (正しい有限温度計算)
+    # =========================================================================
+    ThermalEnsemble,
+    ThermalObservable,
+    
+    # =========================================================================
+    # Observable functions (for ThermalEnsemble.register_observable)
+    # =========================================================================
+    compute_winding_number,
+    compute_phase_entropy,
+    compute_vorticity,
+    
+    # =========================================================================
+    # Environment Builder (場の効果のみ)
+    # =========================================================================
     EnvironmentBuilder,
-    EnvironmentOperator,
-    TemperatureOperator,
     StressOperator,
     Dislocation,
-    # Thermodynamic utilities
+    
+    # =========================================================================
+    # Thermodynamic utilities (これらは正しい)
+    # =========================================================================
     T_to_beta,
     beta_to_T,
     thermal_energy,
@@ -47,6 +64,19 @@ from .environment_operators import (
     compute_entropy,
     compute_free_energy,
     compute_heat_capacity,
+    
+    # =========================================================================
+    # Physical constants
+    # =========================================================================
+    K_B_EV,
+    K_B_J,
+    H_EV,
+    HBAR_EV,
+    
+    # =========================================================================
+    # DEPRECATED (後方互換性のため残す、警告が出る)
+    # =========================================================================
+    TemperatureOperator,  # ⚠️ DEPRECATED: Use ThermalEnsemble instead
 )
 
 __all__ = [
@@ -69,14 +99,21 @@ __all__ = [
     'MemoryKernelConfig',
     'HistoryEntry',
     
-    # Environment
+    # v2.0 Core
+    'ThermalEnsemble',
+    'ThermalObservable',
+    
+    # Observables
+    'compute_winding_number',
+    'compute_phase_entropy',
+    'compute_vorticity',
+    
+    # Environment (場のみ)
     'EnvironmentBuilder',
-    'EnvironmentOperator',
-    'TemperatureOperator',
     'StressOperator',
     'Dislocation',
     
-    # Thermodynamics
+    # Thermodynamic utilities
     'T_to_beta',
     'beta_to_T',
     'thermal_energy',
@@ -85,4 +122,13 @@ __all__ = [
     'compute_entropy',
     'compute_free_energy',
     'compute_heat_capacity',
+    
+    # Constants
+    'K_B_EV',
+    'K_B_J',
+    'H_EV',
+    'HBAR_EV',
+    
+    # Deprecated
+    'TemperatureOperator',
 ]
