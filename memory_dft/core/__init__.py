@@ -30,6 +30,36 @@ v0.5.0: Unified SparseEngine consolidation
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
+# =============================================================================
+# core/environment_operators.py - 環境作用素 B_θ
+# =============================================================================
+from .environment_operators import (
+    # Physical Constants
+    K_B_EV,
+    K_B_J,
+    H_EV,
+    HBAR_EV,
+    
+    # Thermodynamic Utilities
+    T_to_beta,
+    beta_to_T,
+    thermal_energy,
+    boltzmann_weights,
+    partition_function,
+    compute_entropy,
+    compute_free_energy,
+    
+    # Dislocation
+    Dislocation,
+    compute_peach_koehler_force,
+    
+    # Environment Operators
+    EnvironmentOperator,
+    TemperatureOperator,
+    StressOperator,
+    EnvironmentBuilder,
+)
+
 # Memory Kernels (4 components: field, phys, chem, exclusion)
 from .memory_kernel import (
     MemoryKernelBase,
@@ -232,6 +262,31 @@ __all__ = [
     'create_chain',
     'create_ladder',
     'create_square_lattice',
+  
+    # Physical Constants
+    "K_B_EV",
+    "K_B_J", 
+    "H_EV",
+    "HBAR_EV",
+    
+    # Thermodynamic Utilities
+    "T_to_beta",
+    "beta_to_T",
+    "thermal_energy",
+    "boltzmann_weights",
+    "partition_function",
+    "compute_entropy",
+    "compute_free_energy",
+    
+    # Dislocation
+    "Dislocation",
+    "compute_peach_koehler_force",
+    
+    # Environment Operators
+    "EnvironmentOperator",
+    "TemperatureOperator",
+    "StressOperator",
+    "EnvironmentBuilder",
     
     # Backward compatibility (Operators/Hamiltonian)
     'SpinOperators',
