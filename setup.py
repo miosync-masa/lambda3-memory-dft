@@ -1,5 +1,5 @@
 """
-Memory-DFT: Density Functional Theory with Memory
+Memory-DFT:Direct Schrödinger Evolution (DSE)
 """
 
 from setuptools import setup, find_packages
@@ -9,7 +9,7 @@ setup(
     version="0.1.0",
     author="Masamichi Iizumi, Tamaki Iizumi",
     author_email="",
-    description="履歴依存密度汎関数理論",
+    description="Direct Schrödinger Evolution (DSE)",
     long_description=open("README.md").read() if __import__("os").path.exists("README.md") else "",
     long_description_content_type="text/markdown",
     packages=find_packages(),
