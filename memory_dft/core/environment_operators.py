@@ -124,6 +124,17 @@ def compute_entropy(eigenvalues: np.ndarray, beta: float) -> float:
     S = np.log(Z) + beta * E_avg
     return S
 
+def compute_heat_capacity(eigenvalues: np.ndarray, beta: float) -> float:
+    """Compute heat capacity C_V = β² Var(E) in units of k_B."""
+    if beta == float('inf'):
+        return 0.0
+    
+    weights = boltzmann_weights(eigenvalues, beta)
+    E_avg = np.sum(eigenvalues * weights)
+    E2_avg = np.sum(eigenvalues**2 * weights)
+    var_E = E2_avg - E_avg**2
+    
+    return beta**2 * var_E
 
 def compute_free_energy(eigenvalues: np.ndarray, beta: float) -> float:
     """Compute Helmholtz free energy F = -k_B T ln(Z)."""
@@ -133,7 +144,6 @@ def compute_free_energy(eigenvalues: np.ndarray, beta: float) -> float:
     E_shifted = eigenvalues - E_min
     Z = np.sum(np.exp(-beta * E_shifted))
     return E_min - np.log(Z) / beta
-
 
 # =============================================================================
 # Dislocation Data Structure
