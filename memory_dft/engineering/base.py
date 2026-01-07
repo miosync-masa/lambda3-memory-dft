@@ -196,30 +196,36 @@ class EngineeringSolver(ABC):
                  n_sites: int = 16,
                  Lx: int = None,
                  Ly: int = None,
-                 use_gpu: bool = False,
                  use_memory: bool = True,
                  verbose: bool = True):
         """
         Initialize engineering solver with DSE support.
         
+        GPU ONLY: DSE requires CuPy for sparse matrix operations.
+        
         Args:
             material: MaterialParams or material name
             n_sites: Number of lattice sites
             Lx, Ly: 2D lattice dimensions
-            use_gpu: Use GPU acceleration (requires CuPy)
             use_memory: Enable DSE memory effects (default True!)
             verbose: Print progress
+        
+        Raises:
+            ImportError: If CuPy is not available
         """
         # =====================================================================
-        # Backend Selection
+        # GPU Required (DSE is GPU-only!)
         # =====================================================================
-        self.use_gpu = use_gpu and HAS_CUPY
-        if self.use_gpu:
-            self.xp = cp
-            self.sp_module = cp_sparse
-        else:
-            self.xp = np
-            self.sp_module = sp
+        if not HAS_CUPY:
+            raise ImportError(
+                "EngineeringSolver requires CuPy for GPU acceleration.\n"
+                "Install with: pip install cupy-cuda12x  (or appropriate version)\n"
+                "DSE needs GPU for sparse Schrödinger evolution!"
+            )
+        
+        self.use_gpu = True  # Always True
+        self.xp = cp
+        self.sp_module = cp_sparse
         
         # =====================================================================
         # Material
@@ -249,7 +255,7 @@ class EngineeringSolver(ABC):
         # Engine
         # =====================================================================
         try:
-            self.engine = SparseEngine(self.n_sites, use_gpu=self.use_gpu, verbose=False)
+            self.engine = SparseEngine(self.n_sites, use_gpu=True, verbose=False)
         except Exception as e:
             if verbose:
                 print(f"⚠️ SparseEngine not available: {e}")
@@ -272,7 +278,7 @@ class EngineeringSolver(ABC):
             self.history_manager = HistoryManager(
                 max_history=1000,
                 compression_threshold=500,
-                use_gpu=self.use_gpu
+                use_gpu=True
             )
         else:
             self.history_manager = None
@@ -313,7 +319,7 @@ class EngineeringSolver(ABC):
             print(f"  Lattice: {self.Lx} × {self.Ly} = {self.n_sites} sites")
             print(f"  U/t: {self.material.U_over_t:.1f}")
             print(f"  DSE Memory: {'ENABLED' if use_memory else 'DISABLED'}")
-            print(f"  Backend: {'CuPy (GPU)' if self.use_gpu else 'NumPy (CPU)'}")
+            print(f"  Backend: CuPy (GPU)")
             print("=" * 60)
     
     # =========================================================================
@@ -321,25 +327,22 @@ class EngineeringSolver(ABC):
     # =========================================================================
     
     def _to_device(self, arr):
-        """Convert array to device (GPU if available)"""
-        if self.use_gpu and not isinstance(arr, cp.ndarray):
+        """Convert array to GPU (CuPy)"""
+        if not isinstance(arr, cp.ndarray):
             return cp.asarray(arr)
         return arr
     
     def _to_host(self, arr):
-        """Convert array to host (CPU)"""
-        if self.use_gpu and isinstance(arr, cp.ndarray):
+        """Convert array to CPU (NumPy)"""
+        if isinstance(arr, cp.ndarray):
             return cp.asnumpy(arr)
         return arr
     
     def _to_sparse(self, data, format='csr'):
-        """Create sparse matrix on appropriate device"""
-        if self.use_gpu:
-            if isinstance(data, np.ndarray):
-                data = cp.asarray(data)
-            return cp_sparse.diags(data, format=format, dtype=cp.complex128)
-        else:
-            return sp.diags(data, format=format, dtype=np.complex128)
+        """Create sparse matrix on GPU"""
+        if isinstance(data, np.ndarray):
+            data = cp.asarray(data)
+        return cp_sparse.diags(data, format=format, dtype=cp.complex128)
     
     # =========================================================================
     # Abstract Method (サブクラスで実装)
@@ -490,13 +493,19 @@ class EngineeringSolver(ABC):
     def check_failure(self, T: float = 300.0) -> Tuple[bool, Optional[int]]:
         """Check if system has failed (λ > λ_critical)."""
         lambda_c = self.material.lambda_critical_T(T)
-        lambda_local = self.compute_lambda_local()
         
-        for site, lam in enumerate(lambda_local):
-            if lam > 10 or lam < 0:
-                continue
-            if lam > lambda_c:
-                return True, site
+        # Try local λ first, fall back to global only
+        try:
+            lambda_local = self.compute_lambda_local()
+            
+            for site, lam in enumerate(lambda_local):
+                if lam > 10 or lam < 0:
+                    continue
+                if lam > lambda_c:
+                    return True, site
+        except Exception:
+            # Fall back to global λ only
+            pass
         
         lam_global = self.compute_lambda()
         if 0 < lam_global < 10 and lam_global > lambda_c:
@@ -505,64 +514,49 @@ class EngineeringSolver(ABC):
         return False, None
     
     def compute_ground_state(self) -> Tuple[float, Any]:
-        """Compute ground state of current Hamiltonian."""
-        xp = self.xp
+        """Compute ground state of current Hamiltonian (GPU)."""
         H = self.H_K + self.H_V
         
-        if self.use_gpu and cp_eigsh is not None:
-            try:
-                E0, psi0 = cp_eigsh(H, k=1, which='SA')
-                self.psi = psi0[:, 0]
-                self.psi = self.psi / xp.linalg.norm(self.psi)
-                return float(E0[0]), self.psi
-            except Exception:
-                pass
-        
-        # CPU fallback
-        H_cpu = self._to_host(H.toarray()) if hasattr(H, 'toarray') else self._to_host(H)
-        H_sp = sp.csr_matrix(H_cpu)
-        E0, psi0 = eigsh(H_sp, k=1, which='SA')
-        psi = psi0[:, 0]
-        psi = psi / np.linalg.norm(psi)
-        
-        if self.use_gpu:
+        try:
+            E0, psi0 = cp_eigsh(H, k=1, which='SA')
+            self.psi = psi0[:, 0]
+            self.psi = self.psi / cp.linalg.norm(self.psi)
+            return float(E0[0]), self.psi
+        except Exception:
+            # Fallback: convert to CPU, solve, convert back
+            H_cpu = H.get() if hasattr(H, 'get') else H.toarray()
+            H_sp = sp.csr_matrix(H_cpu)
+            E0, psi0 = eigsh(H_sp, k=1, which='SA')
+            psi = psi0[:, 0]
+            psi = psi / np.linalg.norm(psi)
             self.psi = cp.asarray(psi)
-        else:
-            self.psi = psi
-        
-        return float(E0[0]), self.psi
+            return float(E0[0]), self.psi
     
     def evolve_step(self, dt: float = 0.1):
         """
         Single time evolution step with history recording.
         
+        GPU-accelerated Euler evolution + DSE history tracking.
+        
         DSE: Records state in both HistoryManager and SimpleMemoryKernel!
         """
-        xp = self.xp
-        
         if self.psi is None:
             return
         
         H = self.H_K + self.H_V
         
-        # Time evolution
-        if self.use_gpu:
-            # GPU: Euler approximation
-            self.psi = self.psi - 1j * dt * (H @ self.psi)
-            self.psi = self.psi / xp.linalg.norm(self.psi)
-        else:
-            # CPU: expm_multiply
-            self.psi = expm_multiply(-1j * dt * H, self.psi)
-            self.psi = self.psi / np.linalg.norm(self.psi)
+        # GPU: Euler approximation (CuPy sparse)
+        self.psi = self.psi - 1j * dt * (H @ self.psi)
+        self.psi = self.psi / cp.linalg.norm(self.psi)
         
         # Update time
         self.current_time += dt
         
         # Compute observables
         lam = self.compute_lambda()
-        psi_host = self._to_host(self.psi)
+        psi_host = cp.asnumpy(self.psi)  # For history storage
         H_psi = H @ self.psi
-        energy = float(xp.real(xp.vdot(self.psi, H_psi)))
+        energy = float(cp.real(cp.vdot(self.psi, H_psi)))
         
         # DSE: Record in HistoryManager
         if self.history_manager is not None:
@@ -606,7 +600,7 @@ class EngineeringSolver(ABC):
         if self.verbose:
             print(f"\n[DSE Solve] {conditions.n_steps} steps")
             print(f"  Memory: {'ON' if self.use_memory else 'OFF'}")
-            print(f"  Backend: {'GPU' if self.use_gpu else 'CPU'}")
+            print(f"  Backend: GPU (CuPy)")
         
         # Initialize
         T0 = conditions.get_T_at(0)
