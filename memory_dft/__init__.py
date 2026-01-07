@@ -419,11 +419,13 @@ try:
         SolverResult,
         MaterialParams,
         ProcessConditions,
+        create_material,
     )
     from .engineering.thermo_mechanical import (
         ThermoMechanicalSolver,
         ThermoMechanicalResult,
         HeatTreatmentType,
+        HallPetchResult,
     )
     HAS_ENGINEERING = True
 except ImportError:
@@ -433,13 +435,16 @@ except ImportError:
         raise ImportError("engineering module not available")
     def EngineeringSolver(*args, **kwargs):
         raise ImportError("engineering module not available")
+    def create_material(*args, **kwargs):
+        raise ImportError("engineering module not available")
     
     SolverResult = None
     MaterialParams = None
     ProcessConditions = None
     ThermoMechanicalResult = None
     HeatTreatmentType = None
-  
+    HallPetchResult = None
+
 # =============================================================================
 # Interfaces (optional - requires PySCF)
 # =============================================================================
@@ -668,18 +673,17 @@ __all__ = [
     'HAS_HOLOGRAPHIC',
 
     # EngineeringSolver
+    'HAS_ENGINEERING',
     'EngineeringSolver',
     'SolverResult',
     'MaterialParams',
     'ProcessConditions',
-    'HAS_ENGINEERING',
-    'EngineeringSolver',
-    
-    # Thermo-Mechanical
+    'create_material',
     'ThermoMechanicalSolver',
     'ThermoMechanicalResult',
     'HeatTreatmentType',
-
+    'HallPetchResult',
+    
     # Dislocation Dynamics
     'Dislocation',
     'DislocationDynamics',
