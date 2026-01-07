@@ -68,7 +68,7 @@ DOI: 10.5281/zenodo.18095869
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
-__version__ = "0.6.0"
+__version__ = "1.0.0"
 
 # =============================================================================
 # Core Components
@@ -98,10 +98,6 @@ from .core.sparse_engine_unified import (
     # Data classes
     SystemGeometry,
     ComputeResult,
-    # Backward compatibility aliases
-    SparseHamiltonianEngine,
-    SpinOperatorsCompat,
-    HubbardEngineCompat,
 )
 
 # =============================================================================
@@ -162,6 +158,16 @@ from .solvers.dse_solver import (
     quick_dse,
 )
 
+from .solvers.memory_indicators import (
+    # Metrics container
+    MemoryMetrics,
+    
+    # Indicator calculator
+    MemoryIndicator,
+    
+    # Hysteresis analysis
+    HysteresisAnalyzer,
+)
 # =============================================================================
 # Physics
 # =============================================================================
