@@ -16,7 +16,6 @@ from .sparse_engine_unified import (
     # Geometry
     SystemGeometry,
     LatticeGeometry2D,
-    LatticeGeometry,
     
     # Factory functions
     create_chain,
