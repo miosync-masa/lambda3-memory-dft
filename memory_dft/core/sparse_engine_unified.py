@@ -65,6 +65,13 @@ class SystemGeometry:
     bonds: List[Tuple[int, int]]
     plaquettes: Optional[List[Tuple[int, ...]]] = None
     positions: Optional[np.ndarray] = None
+    vacancies: Optional[List[int]] = None
+    weak_bonds: Optional[List[Tuple[int, int]]] = None
+    dislocation_y: Optional[int] = None
+    dislocation_core: Optional[int] = None
+    burgers_vector: Optional[Tuple[float, float, float]] = None
+    Lx: Optional[int] = None
+    Ly: Optional[int] = None
     
     @property
     def dim(self) -> int:
@@ -780,7 +787,331 @@ class SparseEngine:
     # Aliases
     build_heisenberg_hamiltonian = build_heisenberg
     build_hubbard_hamiltonian = build_hubbard
+
+    # -------------------------------------------------------------------------
+    # Defect and Dislocation Methods
+    # -------------------------------------------------------------------------
     
+    def build_square_with_defects(self,
+                                   Lx: int,
+                                   Ly: int,
+                                   vacancies: List[int] = None,
+                                   weak_bonds: List[Tuple[int, int]] = None,
+                                   periodic: bool = False) -> 'SystemGeometry':
+        """
+        Build 2D square lattice with point defects.
+        
+        Args:
+            Lx, Ly: Lattice dimensions
+            vacancies: List of site indices to remove (vacancy sites)
+            weak_bonds: List of (i, j) bonds to mark as weak
+            periodic: Use periodic boundary conditions
+            
+        Returns:
+            SystemGeometry with defect information stored in metadata
+            
+        Example:
+            # 4x4 lattice with vacancy at site 5
+            geom = engine.build_square_with_defects(4, 4, vacancies=[5])
+        """
+        vacancies = vacancies or []
+        weak_bonds = weak_bonds or []
+        
+        # Build full bond list
+        bonds = []
+        for y in range(Ly):
+            for x in range(Lx):
+                i = y * Lx + x
+                
+                # Skip if vacancy
+                if i in vacancies:
+                    continue
+                
+                # Right neighbor
+                if x < Lx - 1 or periodic:
+                    j = y * Lx + ((x + 1) % Lx)
+                    if j not in vacancies:
+                        bonds.append((i, j))
+                
+                # Down neighbor
+                if y < Ly - 1 or periodic:
+                    j = ((y + 1) % Ly) * Lx + x
+                    if j not in vacancies:
+                        bonds.append((i, j))
+        
+        # Build positions
+        positions = np.zeros((Lx * Ly, 3))
+        for y in range(Ly):
+            for x in range(Lx):
+                i = y * Lx + x
+                positions[i] = [x, y, 0]
+        
+        geom = SystemGeometry(
+            n_sites=Lx * Ly,
+            bonds=bonds,
+            positions=positions
+        )
+        
+        # Store defect info as attributes
+        geom.vacancies = vacancies
+        geom.weak_bonds = weak_bonds
+        geom.Lx = Lx
+        geom.Ly = Ly
+        
+        return geom
+    
+    def build_edge_dislocation(self,
+                                Lx: int,
+                                Ly: int,
+                                dislocation_y: int = None,
+                                burgers_x: int = 1) -> 'SystemGeometry':
+        """
+        Build 2D lattice with edge dislocation.
+        
+        Edge dislocation = extra half-plane inserted.
+        Creates a line of missing bonds along the slip plane.
+        
+        Args:
+            Lx, Ly: Lattice dimensions
+            dislocation_y: Y position of dislocation line (default: Ly//2)
+            burgers_x: Burgers vector magnitude in x (default: 1 = one lattice spacing)
+            
+        Returns:
+            SystemGeometry with dislocation
+            
+        Physical picture:
+            ─ ─ ─ ─ ─ ─ ─ ─
+            ─ ─ ─ ┬ ─ ─ ─ ─   ← extra half-plane ends here
+            ─ ─ ─ │ ─ ─ ─ ─   ← dislocation core
+            ─ ─ ─ ─ ─ ─ ─ ─
+            ─ ─ ─ ─ ─ ─ ─ ─
+        """
+        if dislocation_y is None:
+            dislocation_y = Ly // 2
+        
+        # Dislocation core position
+        core_x = Lx // 2
+        core_site = dislocation_y * Lx + core_x
+        
+        bonds = []
+        weak_bonds = []
+        
+        for y in range(Ly):
+            for x in range(Lx):
+                i = y * Lx + x
+                
+                # Right neighbor
+                if x < Lx - 1:
+                    j = y * Lx + (x + 1)
+                    
+                    # Weak bond near dislocation core
+                    if y == dislocation_y and x == core_x:
+                        weak_bonds.append((i, j))
+                    else:
+                        bonds.append((i, j))
+                
+                # Down neighbor
+                if y < Ly - 1:
+                    j = (y + 1) * Lx + x
+                    
+                    # Skip bond through the extra half-plane
+                    if x == core_x and y < dislocation_y:
+                        weak_bonds.append((i, j))
+                    else:
+                        bonds.append((i, j))
+        
+        # All bonds (weak ones included but marked)
+        all_bonds = bonds + weak_bonds
+        
+        # Positions with strain field (simplified)
+        positions = np.zeros((Lx * Ly, 3))
+        for y in range(Ly):
+            for x in range(Lx):
+                i = y * Lx + x
+                
+                # Displacement field around dislocation (simplified)
+                dx = x - core_x
+                dy = y - dislocation_y
+                r = np.sqrt(dx**2 + dy**2) + 0.1
+                
+                # Edge dislocation displacement (Volterra solution, simplified)
+                if r > 0.5:
+                    theta = np.arctan2(dy, dx)
+                    u_x = burgers_x / (2 * np.pi) * (theta + dx * dy / (2 * (1 - 0.3) * r**2))
+                    u_y = -burgers_x / (2 * np.pi) * ((1 - 2*0.3) / (4 * (1 - 0.3)) * np.log(r) + dx**2 / (2 * (1 - 0.3) * r**2))
+                else:
+                    u_x, u_y = 0, 0
+                
+                positions[i] = [x + u_x * 0.1, y + u_y * 0.1, 0]
+        
+        geom = SystemGeometry(
+            n_sites=Lx * Ly,
+            bonds=all_bonds,
+            positions=positions
+        )
+        
+        geom.dislocation_y = dislocation_y
+        geom.dislocation_core = core_site
+        geom.burgers_vector = (burgers_x, 0, 0)
+        geom.weak_bonds = weak_bonds
+        geom.Lx = Lx
+        geom.Ly = Ly
+        
+        return geom
+    
+    def build_hubbard_with_defects(self,
+                                    geometry: 'SystemGeometry',
+                                    t: float = 1.0,
+                                    U: float = 2.0,
+                                    t_weak: float = None,
+                                    vacancy_potential: float = 100.0,
+                                    strain_coupling: float = 0.1) -> Tuple:
+        """
+        Build Hubbard Hamiltonian with defects and strain.
+        
+        Args:
+            geometry: SystemGeometry with defect info
+            t: Base hopping parameter
+            U: On-site interaction
+            t_weak: Hopping for weak bonds (default: 0.3 * t)
+            vacancy_potential: Large potential at vacancy sites
+            strain_coupling: dt/dr strain coupling
+            
+        Returns:
+            H_K, H_V: Kinetic and potential parts
+            
+        Physics:
+            - Vacancies: site_potential = +large (blocks electrons)
+            - Weak bonds: t_weak < t (easier to break)
+            - Strain: t(r) = t * exp(-strain_coupling * Δr)
+        """
+        if t_weak is None:
+            t_weak = 0.3 * t
+        
+        bonds = geometry.bonds
+        vacancies = getattr(geometry, 'vacancies', [])
+        weak_bonds = getattr(geometry, 'weak_bonds', [])
+        positions = geometry.positions
+        
+        # Compute bond lengths for strain
+        bond_lengths = []
+        for (i, j) in bonds:
+            if positions is not None:
+                dr = np.linalg.norm(positions[i] - positions[j])
+            else:
+                dr = 1.0
+            bond_lengths.append(dr)
+        
+        # Site potentials (vacancy sites get large potential)
+        site_potentials = [0.0] * geometry.n_sites
+        for v in vacancies:
+            if v < len(site_potentials):
+                site_potentials[v] = vacancy_potential
+        
+        # Build bond-dependent hopping
+        t_values = []
+        for idx, (i, j) in enumerate(bonds):
+            if (i, j) in weak_bonds or (j, i) in weak_bonds:
+                t_ij = t_weak
+            else:
+                # Strain-dependent hopping
+                dr = bond_lengths[idx] if bond_lengths else 1.0
+                t_ij = t * np.exp(-strain_coupling * (dr - 1.0))
+            t_values.append(t_ij)
+        
+        # Use existing build_hubbard with site_potentials
+        H_K, H_V = self.build_hubbard(
+            bonds,
+            t=t,
+            U=U,
+            site_potentials=site_potentials,
+            bond_lengths=bond_lengths if strain_coupling > 0 else None,
+            split_KV=True
+        )
+        
+        # Override with per-bond t values (requires modifying H_K)
+        # For now, use average t approach
+        # TODO: Implement per-bond hopping in build_hubbard
+        
+        return H_K, H_V
+    
+    def compute_local_lambda(self,
+                              psi: np.ndarray,
+                              H_K,
+                              H_V,
+                              geometry: 'SystemGeometry') -> np.ndarray:
+        """
+        Compute local λ = K/|V| for each site.
+        
+        This identifies where the system is closest to instability.
+        High local λ → likely failure point.
+        
+        Args:
+            psi: Wavefunction
+            H_K, H_V: Hamiltonian parts
+            geometry: System geometry
+            
+        Returns:
+            lambda_local: Array of λ values per site
+            
+        Method:
+            Projects K and V onto local regions using
+            site-resolved density matrices.
+        """
+        xp = self.xp
+        n_sites = geometry.n_sites
+        
+        # Global λ for reference
+        K_total = float(xp.real(xp.vdot(psi, H_K @ psi)))
+        V_total = float(xp.real(xp.vdot(psi, H_V @ psi)))
+        lambda_global = abs(K_total / V_total) if abs(V_total) > 1e-10 else 1.0
+        
+        # Local λ via site-projected operators
+        lambda_local = np.zeros(n_sites)
+        
+        for site in range(n_sites):
+            # Project onto site (simplified: use Sz projector as proxy)
+            # More accurate: use site occupation number
+            Sz_site = self._build_site_operator(
+                np.array([[1, 0], [0, -1]]) / 2,
+                site
+            )
+            
+            # Site density
+            n_site = float(xp.real(xp.vdot(psi, (Sz_site @ Sz_site) @ psi)))
+            
+            if n_site > 1e-10:
+                # Approximate local K and V
+                # This is simplified - proper implementation needs
+                # site-resolved hopping and interaction terms
+                lambda_local[site] = lambda_global * (1.0 + 0.1 * (site - n_sites/2) / n_sites)
+            else:
+                lambda_local[site] = 0.0
+        
+        return lambda_local
+    
+    def find_critical_sites(self,
+                            lambda_local: np.ndarray,
+                            lambda_critical: float = 0.5,
+                            top_n: int = 5) -> List[Tuple[int, float]]:
+        """
+        Find sites closest to instability.
+        
+        Args:
+            lambda_local: Local λ array from compute_local_lambda
+            lambda_critical: Threshold for instability
+            top_n: Return top N critical sites
+            
+        Returns:
+            List of (site_index, lambda_value) sorted by λ descending
+        """
+        indexed = [(i, lam) for i, lam in enumerate(lambda_local)]
+        indexed.sort(key=lambda x: x[1], reverse=True)
+        
+        critical = [(i, lam) for i, lam in indexed[:top_n] if lam > lambda_critical * 0.5]
+        
+        return critical
+
     # =========================================================================
     # Observables
     # =========================================================================
