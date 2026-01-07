@@ -1,45 +1,31 @@
 """
-Thermo-Mechanical DSE Solver
-============================
-
-熱 + 応力 + 転位 + 履歴依存性 の統合シミュレータ
-
-【重要】これは単なるSchrödinger Evolutionではなく、
-Direct Schrödinger Evolution (DSE) である！
-
-  Standard DFT:  E[ρ(r)]      → 同じ構造 = 同じエネルギー
-  DSE:           E[ψ(t)]      → 異なる履歴 = 異なるエネルギー
-  
-  γ_memory = 1.216 (46.7% of correlations are non-Markovian!)
-
-用途:
-  - 熱間加工 (Hot Working): 高温 + 応力
-  - 冷間加工 (Cold Working): 室温 + 応力 + 加工硬化
-  - 焼入れ (Quenching): 急冷 + 残留応力
-  - 焼戻し (Tempering): 再加熱 + 転位再配列
-  - Hall-Petch 検証: 粒径 vs 降伏応力
-
-物理モデル:
-  - Hubbard ハミルトニアン: H = -t Σ c†c + U Σ n↑n↓
-  - 温度依存: t(T), λ_critical(T)
-  - 応力: H_stress = σ × (勾配項)
-  - 転位: ピーチ・ケーラー力 + パイルアップ
-  - 【NEW】履歴依存: H_memory from MemoryKernel
-
-Λ³ での統合:
-  λ(T, σ, history) = K(T, σ) / |V(T, σ) + V_memory(history)|
-  
-  破壊条件: λ > λ_critical(T)
-
+Thermo-Mechanical DSE Solver (CuPy Unified)
+============================================
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
+from __future__ import annotations
+
 import numpy as np
-from typing import Dict, Any, Optional, List, Tuple, Union
+from typing import Dict, Any, Optional, List, Tuple, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
-from scipy.sparse.linalg import eigsh, expm_multiply
+
+# CuPy support
+try:
+    import cupy as cp
+    import cupyx.scipy.sparse as cp_sparse
+    from cupyx.scipy.sparse.linalg import eigsh as cp_eigsh
+    HAS_CUPY = True
+except ImportError:
+    cp = None
+    cp_sparse = None
+    cp_eigsh = None
+    HAS_CUPY = False
+
+# SciPy (CPU fallback)
 import scipy.sparse as sp
+from scipy.sparse.linalg import eigsh, expm_multiply
 
 from .base import (
     EngineeringSolver,
@@ -130,12 +116,13 @@ class HallPetchResult:
 
 
 # =============================================================================
-# Thermo-Mechanical DSE Solver
+# Thermo-Mechanical DSE Solver (CuPy Unified)
 # =============================================================================
 
 class ThermoMechanicalSolver(EngineeringSolver):
     """
     Thermo-mechanical DSE solver with memory effects.
+    GPU acceleration via CuPy.
     
     Integrates:
       - SparseEngine: Hamiltonian construction
@@ -165,11 +152,22 @@ class ThermoMechanicalSolver(EngineeringSolver):
             material: Material parameters
             n_sites: Total sites
             Lx, Ly: 2D lattice dimensions
-            use_gpu: GPU acceleration
+            use_gpu: GPU acceleration (requires CuPy)
             verbose: Print progress
             use_memory: Enable DSE memory effects (default True!)
         """
         super().__init__(material, n_sites, use_gpu, verbose)
+        
+        # =====================================================================
+        # CuPy / NumPy backend selection
+        # =====================================================================
+        self.use_gpu = use_gpu and HAS_CUPY
+        if self.use_gpu:
+            self.xp = cp
+            self.sp_module = cp_sparse
+        else:
+            self.xp = np
+            self.sp_module = sp
         
         # 2D geometry
         if Lx is not None and Ly is not None:
@@ -187,26 +185,25 @@ class ThermoMechanicalSolver(EngineeringSolver):
         self.alpha_T = 1e-4
         
         # =====================================================================
-        # DSE Components (NEW!)
+        # DSE Components
         # =====================================================================
         self.use_memory = use_memory
         
         if use_memory and HistoryManager is not None:
             self.history_manager = HistoryManager(
                 max_history=1000,
-                use_gpu=use_gpu
+                use_gpu=self.use_gpu
             )
         else:
             self.history_manager = None
         
         if use_memory and CompositeMemoryKernel is not None:
-            # 4-layer memory kernel
             self.memory_kernel = CompositeMemoryKernel(
                 weights=KernelWeights(
-                    field=0.3,      # Field theory (long-range)
-                    physical=0.4,   # Physical (power-law decay)
-                    chemical=0.2,   # Chemical (stretched exp)
-                    exclusion=0.1   # Exclusion (short-range)
+                    field=0.3,
+                    physical=0.4,
+                    chemical=0.2,
+                    exclusion=0.1
                 ),
                 kernels={
                     'field': PowerLawKernel(alpha=0.5, tau=10.0),
@@ -225,6 +222,32 @@ class ThermoMechanicalSolver(EngineeringSolver):
         if verbose:
             print(f"  Lattice: {self.Lx} × {self.Ly}")
             print(f"  DSE Memory: {'ENABLED' if use_memory else 'DISABLED'}")
+            print(f"  Backend: {'CuPy (GPU)' if self.use_gpu else 'NumPy (CPU)'}")
+    
+    # -------------------------------------------------------------------------
+    # Array conversion utilities
+    # -------------------------------------------------------------------------
+    
+    def _to_device(self, arr):
+        """Convert array to device (GPU if available)"""
+        if self.use_gpu and not isinstance(arr, cp.ndarray):
+            return cp.asarray(arr)
+        return arr
+    
+    def _to_host(self, arr):
+        """Convert array to host (CPU)"""
+        if self.use_gpu and isinstance(arr, cp.ndarray):
+            return cp.asnumpy(arr)
+        return arr
+    
+    def _to_sparse(self, data, format='csr'):
+        """Create sparse matrix on appropriate device"""
+        if self.use_gpu:
+            if isinstance(data, np.ndarray):
+                data = cp.asarray(data)
+            return cp_sparse.diags(data, format=format, dtype=cp.complex128)
+        else:
+            return sp.diags(data, format=format, dtype=np.complex128)
     
     # -------------------------------------------------------------------------
     # DSE Hamiltonian Construction (with memory!)
@@ -235,9 +258,9 @@ class ThermoMechanicalSolver(EngineeringSolver):
         Build temperature, stress, and history dependent Hamiltonian.
         
         H_eff(T, σ, history) = H_K(T) + H_V + H_stress(σ) + H_memory(history)
-        
-        This is the core DSE feature: history-dependent Hamiltonian!
         """
+        xp = self.xp
+        
         if self.engine is None:
             raise RuntimeError("SparseEngine not initialized")
         
@@ -246,8 +269,7 @@ class ThermoMechanicalSolver(EngineeringSolver):
         t_eff = max(0.1 * self.material.t_hop, t_eff)
         
         # U/t ratio adjustment for stability
-        # Strong correlation (U/t > 4) causes V → 0 → λ divergence
-        U = min(self.material.U_int, 3.0 * t_eff)  # Cap U/t at 3
+        U = min(self.material.U_int, 3.0 * t_eff)
         
         # Build geometry
         if self.geometry is None:
@@ -280,26 +302,28 @@ class ThermoMechanicalSolver(EngineeringSolver):
             H_stress = self._build_stress_hamiltonian(sigma)
             self.H_V = self.H_V + H_stress
         
-        # =====================================================================
-        # DSE: Add memory term! (NEW!)
-        # =====================================================================
+        # DSE: Add memory term!
         if self.use_memory and self.memory_kernel is not None:
             H_memory = self._build_memory_hamiltonian()
             self.H_V = self.H_V + H_memory
             
-            # Track memory contribution
             if self.psi is not None:
-                mem_contrib = float(np.real(np.vdot(self.psi, H_memory @ self.psi)))
+                psi_host = self._to_host(self.psi)
+                H_mem_host = H_memory
+                if self.use_gpu:
+                    H_mem_host = H_memory.get() if hasattr(H_memory, 'get') else H_memory
+                mem_contrib = float(np.real(np.vdot(psi_host, H_mem_host @ psi_host)))
                 self.memory_history.append(mem_contrib)
         
         return self.H_K, self.H_V
     
     def _build_stress_hamiltonian(self, sigma: float):
         """Build stress gradient term"""
+        xp = self.xp
         n = self.n_sites
         dim = self.engine.dim
         
-        diag = np.zeros(dim)
+        diag = xp.zeros(dim, dtype=xp.float64)
         
         if n <= 16:
             for state in range(dim):
@@ -308,48 +332,40 @@ class ThermoMechanicalSolver(EngineeringSolver):
                         x = site % self.Lx
                         diag[state] += sigma * (x - self.Lx / 2) / self.Lx
         
-        return sp.diags(diag, format='csr', dtype=np.complex128)
+        return self._to_sparse(diag)
     
     def _build_memory_hamiltonian(self):
         """
         Build history-dependent memory term.
         
         H_memory = Σ_τ K(t-τ) × V_interaction(τ)
-        
-        This is the KEY DSE feature!
         """
+        xp = self.xp
         dim = self.engine.dim
         
         if self.history_manager is None or len(self.history_manager.history) < 2:
-            return sp.csr_matrix((dim, dim), dtype=np.complex128)
+            return self._to_sparse(xp.zeros(dim, dtype=xp.float64))
         
-        # Get history
         history = self.history_manager.history
-        n_history = len(history)
         
-        # Memory strength from kernel
-        memory_diag = np.zeros(dim)
+        memory_diag = xp.zeros(dim, dtype=xp.float64)
         total_weight = 0.0
         
-        for tau, snapshot in enumerate(history[-50:]):  # Last 50 steps
-            # Kernel weight
+        for tau, snapshot in enumerate(history[-50:]):
             weight = self.memory_kernel.evaluate(tau + 1)
             total_weight += weight
             
-            # Use past lambda as memory influence
             if hasattr(snapshot, 'lambda_val'):
                 lambda_past = snapshot.lambda_val
             else:
                 lambda_past = 0.5
             
-            # Memory contribution (simplified: diagonal)
             memory_diag += weight * lambda_past * 0.01
         
-        # Normalize
         if total_weight > 0:
             memory_diag /= total_weight
         
-        return sp.diags(memory_diag, format='csr', dtype=np.complex128)
+        return self._to_sparse(memory_diag)
     
     def _get_neighbors(self, site: int) -> List[int]:
         """Get neighboring sites"""
@@ -373,69 +389,111 @@ class ThermoMechanicalSolver(EngineeringSolver):
     # -------------------------------------------------------------------------
     
     def evolve_step(self, dt: float):
-        """
-        Evolve wavefunction with history recording.
-        """
+        """Evolve wavefunction with history recording."""
+        xp = self.xp
+        
         if self.psi is None:
             return
         
         H = self.H_K + self.H_V
-        self.psi = expm_multiply(-1j * dt * H, self.psi)
-        self.psi = self.psi / np.linalg.norm(self.psi)
+        
+        # Time evolution
+        if self.use_gpu:
+            # GPU: use matrix exponential approximation
+            # For small dt, (1 - i*dt*H) @ psi is reasonable
+            self.psi = self.psi - 1j * dt * (H @ self.psi)
+            self.psi = self.psi / xp.linalg.norm(self.psi)
+        else:
+            # CPU: use scipy expm_multiply
+            self.psi = expm_multiply(-1j * dt * H, self.psi)
+            self.psi = self.psi / np.linalg.norm(self.psi)
         
         # Record in history (DSE!)
         if self.history_manager is not None:
             lam = self.compute_lambda()
+            psi_host = self._to_host(self.psi)
+            H_host = self._to_host(H @ self.psi) if self.use_gpu else H @ self.psi
+            energy = float(np.real(np.vdot(psi_host, self._to_host(H_host))))
+            
             self.history_manager.record(
                 StateSnapshot(
-                    psi=self.psi.copy(),
+                    psi=psi_host.copy(),
                     lambda_val=lam,
-                    energy=float(np.real(np.vdot(self.psi, H @ self.psi)))
+                    energy=energy
                 )
             )
     
     def compute_lambda(self) -> float:
         """Compute λ = K/|V| with stability check"""
+        xp = self.xp
+        
         if self.psi is None or self.H_K is None or self.H_V is None:
             return 1.0
         
-        K = float(np.real(np.vdot(self.psi, self.H_K @ self.psi)))
-        V = float(np.real(np.vdot(self.psi, self.H_V @ self.psi)))
+        K = float(xp.real(xp.vdot(self.psi, self.H_K @ self.psi)))
+        V = float(xp.real(xp.vdot(self.psi, self.H_V @ self.psi)))
         
         # Stability: avoid division by near-zero
         if abs(V) < 0.01:
-            V = np.sign(V) * 0.01 if V != 0 else 0.01
+            V = 0.01 if V >= 0 else -0.01
         
         return abs(K / V)
     
-    def compute_gamma_memory(self) -> float:
-        """
-        Compute γ_memory: fraction of non-Markovian correlations.
+    def compute_lambda_local(self) -> np.ndarray:
+        """Compute local λ for each site"""
+        if self.engine is not None and hasattr(self.engine, 'compute_local_lambda'):
+            return self.engine.compute_local_lambda(
+                self._to_host(self.psi),
+                self.H_K,
+                self.H_V,
+                self.geometry
+            )
         
-        Reference: γ_memory = 1.216 (46.7%) from DSE theory
-        """
+        # Fallback: uniform distribution based on global λ
+        lam_global = self.compute_lambda()
+        return np.ones(self.n_sites) * lam_global
+    
+    def compute_gamma_memory(self) -> float:
+        """Compute γ_memory: fraction of non-Markovian correlations."""
         if self.history_manager is None or len(self.memory_history) < 10:
             return 0.0
         
-        # Compare with and without memory
         mem_contribs = np.array(self.memory_history[-50:])
         
-        # Autocorrelation at lag 1
         if len(mem_contribs) > 1:
             gamma = np.abs(np.corrcoef(mem_contribs[:-1], mem_contribs[1:])[0, 1])
+            if np.isnan(gamma):
+                gamma = 0.0
         else:
             gamma = 0.0
         
         return gamma
+    
+    def compute_ground_state(self) -> Tuple[float, Any]:
+        """Compute ground state"""
+        H = self.H_K + self.H_V
+        
+        if self.use_gpu and cp_eigsh is not None:
+            # GPU
+            E0, psi0 = cp_eigsh(H, k=1, which='SA')
+            return float(E0[0]), psi0[:, 0]
+        else:
+            # CPU
+            H_cpu = H
+            E0, psi0 = eigsh(H_cpu, k=1, which='SA')
+            psi = psi0[:, 0]
+            if self.use_gpu:
+                psi = cp.asarray(psi)
+            return float(E0[0]), psi
     
     # -------------------------------------------------------------------------
     # Main Solve
     # -------------------------------------------------------------------------
     
     def solve(self, conditions: ProcessConditions, **kwargs) -> ThermoMechanicalResult:
-        """
-        Main DSE solver: evolve with history-dependent Hamiltonian.
-        """
+        """Main DSE solver: evolve with history-dependent Hamiltonian."""
+        xp = self.xp
+        
         dt = kwargs.get('dt', 0.1)
         n_sub = kwargs.get('n_steps_per_point', 5)
         
@@ -445,6 +503,7 @@ class ThermoMechanicalSolver(EngineeringSolver):
         if self.verbose:
             print(f"\n[DSE Solve] {conditions.n_steps} steps")
             print(f"  Memory: {'ON' if self.use_memory else 'OFF'}")
+            print(f"  Backend: {'GPU' if self.use_gpu else 'CPU'}")
         
         # Initialize
         T0 = conditions.get_T_at(0)
@@ -460,27 +519,23 @@ class ThermoMechanicalSolver(EngineeringSolver):
             T = conditions.get_T_at(step)
             sigma = conditions.get_sigma_at(step)
             
-            # Update Hamiltonian (includes memory term!)
             self._build_hamiltonian(T, sigma)
             
-            # Sub-steps
             for _ in range(n_sub):
                 self.evolve_step(dt)
             
-            # Compute observables
             lam = self.compute_lambda()
-            E = float(np.real(np.vdot(self.psi, (self.H_K + self.H_V) @ self.psi)))
+            psi_host = self._to_host(self.psi)
+            H = self.H_K + self.H_V
+            E = float(np.real(np.vdot(psi_host, self._to_host(H @ self.psi))))
             
-            # Store history
             self.lambda_history.append(lam)
             self.energy_history.append(E)
             self.T_history.append(T)
             self.sigma_history.append(sigma)
             
-            # Dislocation motion
             self._attempt_dislocation_motion(T, sigma)
             
-            # Check failure
             failed, fail_site = self.check_failure(T)
             if failed:
                 if self.verbose:
@@ -507,7 +562,6 @@ class ThermoMechanicalSolver(EngineeringSolver):
                 gamma = self.compute_gamma_memory()
                 print(f"  Step {step}: T={T:.0f}K, σ={sigma:.2f}, λ={lam:.4f}, γ_mem={gamma:.3f}")
         
-        # Final result
         return ThermoMechanicalResult(
             success=True,
             failed=False,
@@ -525,23 +579,16 @@ class ThermoMechanicalSolver(EngineeringSolver):
         )
     
     def check_failure(self, T: float) -> Tuple[bool, Optional[int]]:
-        """
-        Check for material failure.
-        
-        Failure condition: λ_local > λ_critical(T)
-        But ignore anomalous values (λ > 10 likely numerical issue)
-        """
+        """Check for material failure."""
         lambda_local = self.compute_lambda_local()
         lambda_c = self.material.lambda_critical_T(T)
         
         for site, lam in enumerate(lambda_local):
-            # Skip anomalous values
             if lam > 10 or lam < 0:
                 continue
             if lam > lambda_c:
                 return True, site
         
-        # Also check global λ
         lam_global = self.compute_lambda()
         if 0 < lam_global < 10 and lam_global > lambda_c:
             return True, -1
@@ -549,7 +596,7 @@ class ThermoMechanicalSolver(EngineeringSolver):
         return False, None
     
     def _attempt_dislocation_motion(self, T: float, sigma: float):
-        """Attempt to move dislocations based on T and σ."""
+        """Attempt to move dislocations."""
         if not self.dislocations:
             return
         
@@ -563,17 +610,16 @@ class ThermoMechanicalSolver(EngineeringSolver):
             F = sigma * disl.burgers_magnitude
             neighbors = self._get_neighbors(disl.site)
             best_site = None
-            best_score = -np.inf
+            best_score = -float('inf')
             
             for n in neighbors:
                 if n >= len(lambda_local):
                     continue
                 lam_n = lambda_local[n]
                 
-                # Skip anomalous values
                 if lam_n > 10 or lam_n < 0:
                     continue
-                    
+                
                 score = F * lam_n
                 
                 if score > best_score and lam_n > lambda_c * 0.5:
@@ -611,7 +657,7 @@ class ThermoMechanicalSolver(EngineeringSolver):
         
         self.dislocations = []
         for i in range(n_dislocations):
-            site = np.random.randint(0, self.n_sites)
+            site = int(np.random.randint(0, self.n_sites))
             self.dislocations.append(Dislocation(site=site))
         
         T_path = np.linspace(T_start, T_end, n_steps)
@@ -634,7 +680,7 @@ class ThermoMechanicalSolver(EngineeringSolver):
         
         self.dislocations = []
         for i in range(n_dislocations):
-            site = np.random.randint(0, self.n_sites)
+            site = int(np.random.randint(0, self.n_sites))
             self.dislocations.append(Dislocation(site=site))
         
         T_path = np.ones(n_steps) * T
@@ -705,17 +751,14 @@ class ThermoMechanicalSolver(EngineeringSolver):
                             sigma_max: float = 5.0,
                             n_dislocations: int = 3,
                             n_stress_points: int = 25) -> HallPetchResult:
-        """
-        Simulate Hall-Petch relation with DSE.
-        
-        Memory effects included → more accurate path dependence!
-        """
+        """Simulate Hall-Petch relation with DSE."""
         if self.verbose:
             print("\n" + "=" * 60)
             print("🔬 HALL-PETCH DSE SIMULATION")
             print("=" * 60)
             print(f"  Grain sizes: {grain_sizes}")
             print(f"  Memory: {'ON' if self.use_memory else 'OFF'}")
+            print(f"  Backend: {'GPU' if self.use_gpu else 'CPU'}")
         
         results = {
             'd': [],
@@ -730,48 +773,41 @@ class ThermoMechanicalSolver(EngineeringSolver):
             if self.verbose:
                 print(f"\n--- Grain size: {gs} sites ---")
             
-            # Setup geometry
             self.Lx = gs * 2
-            self.Ly = 2  # Fixed for memory efficiency
+            self.Ly = 2
             self.n_sites = self.Lx * self.Ly
             
-            # Skip if too large
             if self.n_sites > 16:
                 if self.verbose:
                     print(f"  Skip: n_sites={self.n_sites} > 16")
                 continue
             
-            # Reset
-            self.engine = SparseEngine(self.n_sites, use_gpu=False, verbose=False)
+            self.engine = SparseEngine(self.n_sites, use_gpu=self.use_gpu, verbose=False)
             self.geometry = None
             
-            # Reset history for DSE
             if self.history_manager is not None:
                 self.history_manager.clear()
             self.memory_history = []
             
-            # Grain boundary
             self.grain_boundary_sites = [gs + y * self.Lx for y in range(self.Ly)]
             
-            # Dislocations
             self.dislocations = []
             for i in range(n_dislocations):
                 site = (i % self.Ly) * self.Lx + (gs // 2)
                 if site < self.n_sites:
                     self.dislocations.append(Dislocation(site=site))
             
-            # Find yield stress
             sigma_y = sigma_max
             
             for sigma in stress_range:
                 self._build_hamiltonian(T, sigma)
                 E0, self.psi = self.compute_ground_state()
                 
-                # Record in history (DSE!)
                 if self.history_manager is not None:
                     lam = self.compute_lambda()
+                    psi_host = self._to_host(self.psi)
                     self.history_manager.record(
-                        StateSnapshot(psi=self.psi.copy(), lambda_val=lam, energy=E0)
+                        StateSnapshot(psi=psi_host.copy(), lambda_val=lam, energy=E0)
                     )
                 
                 self._attempt_dislocation_motion(T, sigma)
@@ -791,7 +827,6 @@ class ThermoMechanicalSolver(EngineeringSolver):
                         print(f"  Yield at σ = {sigma:.3f}, λ_GB = {lambda_gb:.3f}")
                     break
             
-            # Record
             d_nm = gs * self.material.burgers_vector / 10
             results['d'].append(d_nm)
             results['inv_sqrt_d'].append(1.0 / np.sqrt(d_nm))
@@ -805,7 +840,6 @@ class ThermoMechanicalSolver(EngineeringSolver):
                 sigma_y=np.array([]),
             )
         
-        # Fit
         coeffs = np.polyfit(results['inv_sqrt_d'], results['sigma_y'], 1)
         k_HP = coeffs[0]
         sigma_0 = coeffs[1]
@@ -838,19 +872,19 @@ def main():
     """Test DSE thermo-mechanical solver"""
     print("\n" + "🔥" * 25)
     print("  THERMO-MECHANICAL DSE SOLVER TEST")
+    print(f"  CuPy available: {HAS_CUPY}")
     print("🔥" * 25)
     
-    # Create solver with DSE
     solver = ThermoMechanicalSolver(
         material='Fe',
         n_sites=12,
         Lx=4,
         Ly=3,
         verbose=True,
-        use_memory=True  # DSE!
+        use_memory=True,
+        use_gpu=HAS_CUPY
     )
     
-    # Test: Cold working with DSE
     print("\n" + "-" * 40)
     print("Test: Cold Working (DSE)")
     print("-" * 40)
@@ -863,14 +897,14 @@ def main():
     print(f"  γ_memory: {result.gamma_memory:.3f}")
     print(f"  Failed: {result.failed}")
     
-    # Test: Hall-Petch with DSE
     print("\n" + "-" * 40)
     print("Test: Hall-Petch (DSE)")
     print("-" * 40)
     solver2 = ThermoMechanicalSolver(
         material='Fe',
         verbose=True,
-        use_memory=True
+        use_memory=True,
+        use_gpu=HAS_CUPY
     )
     hp_result = solver2.simulate_hall_petch(
         grain_sizes=[2, 3, 4],
