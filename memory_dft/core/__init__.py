@@ -19,7 +19,7 @@ from .history_manager import (
 # Replaces: sparse_engine.py, hubbard_engine.py, operators.py, hamiltonian.py
 # =============================================================================
 
-from .core.sparse_engine_unified import (
+from .sparse_engine_unified import (
     # Main class
     SparseEngine,
     # Data classes
@@ -130,7 +130,7 @@ def build_hamiltonian(model, lattice, ops, **kwargs):
 # =============================================================================
 # core/environment_operators.py 
 # =============================================================================
-from memory_dft.core.environment_operators import (
+from .environment_operators import (
     # Physical Constants
     K_B_EV,
     K_B_J,
@@ -198,4 +198,10 @@ __all__ = [
     'create_chain',
     'create_ladder',
     'create_square_lattice',
+
+    # Environment Operators
+    "EnvironmentOperator",
+    "TemperatureOperator",
+    "StressOperator",
+    "EnvironmentBuilder",
 ]
