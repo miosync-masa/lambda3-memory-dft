@@ -486,24 +486,13 @@ __all__ = [
     '__version__',
     
     # Core - Memory Kernels
-    'MemoryKernelBase',
-    'PowerLawKernel',
-    'StretchedExpKernel',
-    'StepKernel',
-    'ExclusionKernel',
-    'CompositeMemoryKernel',
-    'CompositeMemoryKernelGPU',
-    'KernelWeights',
-    'SimpleMemoryKernel',
-    'CatalystMemoryKernel',
-    'CatalystEvent',
-    'RepulsiveMemoryKernel',
-    
-    # Core - History
+    'MemoryKernel',
+    'MemoryKernelConfig',
+    'HistoryEntry',
     'HistoryManager',
     'HistoryManagerGPU',
-    'LambdaDensityCalculator',
     'StateSnapshot',
+    'LambdaDensityCalculator',
     
     # Core - Unified Sparse Engine (v0.5.0)
     'SparseEngine',
@@ -630,18 +619,6 @@ __all__ = [
     'HolographicMeasurement',
     'quick_holographic_measurement',
     'HAS_HOLOGRAPHIC',
-
-    # EngineeringSolver
-    'HAS_ENGINEERING',
-    'EngineeringSolver',
-    'SolverResult',
-    'MaterialParams',
-    'ProcessConditions',
-    'create_material',
-    'ThermoMechanicalSolver',
-    'ThermoMechanicalResult',
-    'HeatTreatmentType',
-    'HallPetchResult',
     
     # Interfaces - PySCF
     'HAS_PYSCF',
