@@ -41,43 +41,6 @@ from .rdm import (
     compute_rdm2,
 )
 
-# Thermodynamics
-from .thermodynamics import (
-    # Constants
-    K_B_EV,
-    K_B_J,
-    H_EV,
-    HBAR_EV,
-    
-    # Temperature conversion
-    T_to_beta,
-    beta_to_T,
-    thermal_energy,
-    
-    # Boltzmann statistics
-    boltzmann_weights,
-    partition_function,
-    
-    # Thermal expectation values
-    thermal_expectation,
-    thermal_expectation_zero_T,
-    thermal_average_energy,
-    thermal_energy_variance,
-    
-    # Thermodynamic quantities
-    compute_entropy,
-    compute_free_energy,
-    compute_heat_capacity,
-    
-    # Thermal states
-    thermal_density_matrix,
-    sample_thermal_state,
-    
-    # Temperature-dependent Hamiltonian H(T)
-    TemperatureDependentHamiltonian,
-    ThermalPathEvolver,
-)
-
 # Topology (NEW!)
 from .topology import (
     # Result containers
@@ -137,41 +100,7 @@ __all__ = [
     'PySCFRDM',
     'get_rdm_calculator',
     'compute_rdm2',
-    
-    # Thermodynamics - Constants
-    'K_B_EV',
-    'K_B_J',
-    'H_EV',
-    'HBAR_EV',
-    
-    # Thermodynamics - Temperature
-    'T_to_beta',
-    'beta_to_T',
-    'thermal_energy',
-    
-    # Thermodynamics - Boltzmann
-    'boltzmann_weights',
-    'partition_function',
-    
-    # Thermodynamics - Expectation
-    'thermal_expectation',
-    'thermal_expectation_zero_T',
-    'thermal_average_energy',
-    'thermal_energy_variance',
-    
-    # Thermodynamics - Quantities
-    'compute_entropy',
-    'compute_free_energy',
-    'compute_heat_capacity',
-    
-    # Thermodynamics - States
-    'thermal_density_matrix',
-    'sample_thermal_state',
-    
-    # Thermodynamics - H(T)
-    'TemperatureDependentHamiltonian',
-    'ThermalPathEvolver',
-    
+       
     # Topology (NEW!)
     'TopologyResult',
     'ReconnectionEvent',
@@ -187,5 +116,4 @@ __all__ = [
     'MassGapCalculator',
     'TopologyEngine',
     'TopologyEngineExtended',
-
 ]
