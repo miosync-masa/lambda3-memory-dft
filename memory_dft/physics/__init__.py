@@ -23,13 +23,22 @@ from .lambda3_bridge import (
     map_kernel_to_environment
 )
 
-# Vorticity and Correlation
 from .vorticity import (
     VorticityCalculator,
     VorticityResult,
     GammaExtractor,
     compute_orbital_distance_matrix,
-    vorticity_from_pyscf,
+)
+
+from .rdm import (
+    RDMCalculator,
+    RDM2Result,
+    SystemType,
+    HubbardRDM,
+    HeisenbergRDM,
+    PySCFRDM,
+    get_rdm_calculator,
+    compute_rdm2,
 )
 
 # Thermodynamics
@@ -67,21 +76,6 @@ from .thermodynamics import (
     # Temperature-dependent Hamiltonian H(T)
     TemperatureDependentHamiltonian,
     ThermalPathEvolver,
-)
-
-# Two-Particle Reduced Density Matrix
-from .rdm import (
-    # Base
-    RDMCalculator,
-    RDM2Result,
-    SystemType,
-    # Implementations
-    HubbardRDM,
-    HeisenbergRDM,
-    PySCFRDM,
-    # Factory
-    get_rdm_calculator,
-    compute_rdm2,
 )
 
 # Topology (NEW!)
@@ -134,7 +128,15 @@ __all__ = [
     'VorticityResult',
     'GammaExtractor',
     'compute_orbital_distance_matrix',
-    'vorticity_from_pyscf',
+    # RDM
+    'RDMCalculator',
+    'RDM2Result',
+    'SystemType',
+    'HubbardRDM',
+    'HeisenbergRDM',
+    'PySCFRDM',
+    'get_rdm_calculator',
+    'compute_rdm2',
     
     # Thermodynamics - Constants
     'K_B_EV',
@@ -169,18 +171,6 @@ __all__ = [
     # Thermodynamics - H(T)
     'TemperatureDependentHamiltonian',
     'ThermalPathEvolver',
-    
-    # 2-RDM
-    'RDMCalculator',
-    'RDM2Result',
-    'SystemType',
-    # Implementations
-    'HubbardRDM',
-    'HeisenbergRDM',
-    'PySCFRDM',
-    # Factory
-    'get_rdm_calculator',
-    'compute_rdm2',
     
     # Topology (NEW!)
     'TopologyResult',
