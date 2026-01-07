@@ -4,6 +4,24 @@ Holographic Interpretation Module
 
 DSEの履歴依存構造をAdS/CFT的に解釈するモジュール。
 
+memory_dft/holographic/
+  │
+  ├── __init__.py       # 公開API
+  │
+  ├── dual.py           # AdS/CFT 解釈層
+  │   ├── HolographicDual      - Bulk/Boundary変換
+  │   ├── rt_entropy           - RT entropy
+  │   ├── complexity_*         - CV/CA conjecture
+  │   ├── c_function           - C-theorem
+  │   ├── transfer_entropy     - 因果解析
+  │   └── verify_duality       - 双対性検証
+  │
+  └── measurement.py    # AdS/CFT 測定プロトコル ★NEW★
+      ├── HolographicMeasurement     - PRE/POST 測定
+      ├── MeasurementRecord          - 1ステップの記録
+      ├── HolographicMeasurementResult
+      └── quick_holographic_measurement
+
 核心的アイデア:
     - φ_history (位相蓄積履歴) → Bulk geometry
     - 非マルコフ性 → Bulk の深さ方向 (z)
