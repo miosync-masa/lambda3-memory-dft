@@ -19,25 +19,25 @@ __all__: List[str] = []
 try:
     from .pyscf_interface import (
         DSECalculator,
+        GeometryStep,
+        SinglePointResult,
         PathResult,
         ComparisonResult,
-        GeometryStep,
-        MemoryKernelDFTWrapper,
-        MemoryKernelDFT,  # deprecated alias
         create_h2_stretch_path,
         create_h2_compress_path,
-        demo_h2_comparison,
+        create_cyclic_path,
+        HAS_PYSCF,
     )
     __all__.extend([
         'DSECalculator',
-        'PathResult', 
-        'ComparisonResult',
         'GeometryStep',
-        'MemoryKernelDFTWrapper',
-        'MemoryKernelDFT',
+        'SinglePointResult',
+        'PathResult',
+        'ComparisonResult',
         'create_h2_stretch_path',
         'create_h2_compress_path',
-        'demo_h2_comparison',
+        'create_cyclic_path',
+        'HAS_PYSCF',
     ])
     HAS_PYSCF = True
 except ImportError:
