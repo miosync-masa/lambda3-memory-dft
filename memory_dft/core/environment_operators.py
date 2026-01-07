@@ -4,33 +4,31 @@ Environment Operators for Memory-DFT
 
 H-CSP理論に基づく環境作用素 B_θ の実装
 
-  H_total = H_0 + B_θ(H_0)
+【設計思想 v2.0】
   
-  B_θ = B_θ_field × B_θ_env_phys × B_θ_env_chem
-  
-    Θ_field:     g, E, B, D（場：普遍的）
-    Θ_env_phys:  T, σ, p, h（物理環境：局所的）
-    Θ_env_chem:  c_O₂, c_Cl, pH（化学環境：不可逆）
+  ❌ 旧設計: H(T) を作る（経験則）
+  ✅ 新設計: H は固定、温度は分布にだけ入る
 
-【設計思想】
-  core/sparse_engine_unified.py が H_0 を構築
-  core/environment_operators.py が ΔH(T,σ,...) を構築
-  solvers/time_evolution.py が H_total で時間発展
+  温度は「ハミルトニアンを変える」のではなく
+  「固有状態の重み分布を変える」
+
+  <O>(T) = Σ_n w_n(T) × <n|O|n>
+  w_n(T) = exp(-βE_n) / Z
 
 【H-CSP公理との対応】
-  公理5（環境作用）：B_θ: H → H(θ)
-
-【EDR方程式】（理論メモより）
-  K = K_th + K_mech + K_EM + K_rad
-  |V|_eff = |V|_mat - ΔV_EM - ΔV_rad - ΔV_oxide - ΔV_corr + ρ·p + ΔV_cap
+  公理2（非可換）: 経路依存性は MemoryKernel で扱う
+  公理5（環境作用）: 応力などの「場」はハミルトニアンに入れてよい
+                    温度は分布に入る（環境関手ではない）
 
 Author: Masamichi Iizumi, Tamaki Iizumi
+Version: 2.0 - ThermalEnsemble導入、TemperatureOperator非推奨
 """
 
 from __future__ import annotations
 
 import numpy as np
-from typing import List, Tuple, Optional, Dict, Any, Union, TYPE_CHECKING
+import warnings
+from typing import List, Tuple, Optional, Dict, Any, Union, TYPE_CHECKING, Callable
 from dataclasses import dataclass, field
 
 # GPU support
@@ -44,6 +42,7 @@ except ImportError:
     HAS_CUPY = False
 
 import scipy.sparse as sp
+from scipy.sparse.linalg import eigsh
 
 # Type hints
 if TYPE_CHECKING:
@@ -61,7 +60,7 @@ HBAR_EV = 6.582119569e-16 # Reduced Planck constant in eV·s
 
 
 # =============================================================================
-# Basic Thermodynamic Utilities
+# Basic Thermodynamic Utilities (これらは正しい)
 # =============================================================================
 
 def T_to_beta(T_kelvin: float, energy_scale: float = 1.0) -> float:
@@ -84,7 +83,12 @@ def thermal_energy(T_kelvin: float) -> float:
 
 
 def boltzmann_weights(eigenvalues: np.ndarray, beta: float) -> np.ndarray:
-    """Compute Boltzmann weights exp(-β E_n) / Z."""
+    """
+    Compute Boltzmann weights exp(-β E_n) / Z.
+    
+    これが「温度」の正しい入れ方！
+    ハミルトニアンではなく、固有状態の重みに入る。
+    """
     if beta == float('inf'):
         E_min = eigenvalues[0]
         weights = np.zeros_like(eigenvalues, dtype=float)
@@ -124,6 +128,7 @@ def compute_entropy(eigenvalues: np.ndarray, beta: float) -> float:
     S = np.log(Z) + beta * E_avg
     return S
 
+
 def compute_heat_capacity(eigenvalues: np.ndarray, beta: float) -> float:
     """Compute heat capacity C_V = β² Var(E) in units of k_B."""
     if beta == float('inf'):
@@ -136,6 +141,7 @@ def compute_heat_capacity(eigenvalues: np.ndarray, beta: float) -> float:
     
     return beta**2 * var_E
 
+
 def compute_free_energy(eigenvalues: np.ndarray, beta: float) -> float:
     """Compute Helmholtz free energy F = -k_B T ln(Z)."""
     if beta == float('inf'):
@@ -145,8 +151,346 @@ def compute_free_energy(eigenvalues: np.ndarray, beta: float) -> float:
     Z = np.sum(np.exp(-beta * E_shifted))
     return E_min - np.log(Z) / beta
 
+
 # =============================================================================
-# Dislocation Data Structure
+# ThermalEnsemble: 正しい有限温度計算 (v2.0 NEW!)
+# =============================================================================
+
+@dataclass
+class ThermalObservable:
+    """熱平均の結果を格納"""
+    T: float
+    beta: float
+    value: float
+    variance: float = 0.0
+    n_states: int = 0
+    
+    
+class ThermalEnsemble:
+    """
+    正しい有限温度計算クラス
+    
+    【設計思想】
+    温度はハミルトニアンに入れない！
+    温度は固有状態の重み分布にだけ入る！
+    
+    <O>(T) = Σ_n w_n(T) × <n|O|n>
+    w_n(T) = exp(-βE_n) / Z
+    
+    Usage:
+        # Step 1: ハミルトニアンは固定！
+        H_K, H_V = engine.build_hubbard(bonds, t=1.0, U=2.0)
+        H = H_K + H_V
+        
+        # Step 2: ThermalEnsemble を作る（固有状態を求める）
+        ensemble = ThermalEnsemble(engine, H)
+        
+        # Step 3: 位相指標を登録
+        ensemble.register_observable('Q', compute_winding)
+        ensemble.register_observable('S_phase', compute_phase_entropy)
+        
+        # Step 4: 温度スキャン（ハミルトニアンは変わらない！）
+        for T in T_values:
+            Q_thermal = ensemble.thermal_average('Q', T)
+            # これが「熱的振る舞い」の正しい計算
+    """
+    
+    def __init__(self, 
+                 engine: 'SparseEngine',
+                 H: Any,
+                 n_eigenstates: int = None,
+                 compute_all: bool = False):
+        """
+        Initialize thermal ensemble.
+        
+        Args:
+            engine: SparseEngine instance
+            H: Hamiltonian (FIXED! 温度で変えない！)
+            n_eigenstates: Number of eigenstates to compute (None = all)
+            compute_all: If True, compute all eigenstates (exact)
+        """
+        self.engine = engine
+        self.H = H
+        self.dim = engine.dim
+        self.use_gpu = engine.use_gpu
+        self.xp = engine.xp
+        
+        # 固有状態を求める（一度だけ！）
+        self._compute_eigenstates(n_eigenstates, compute_all)
+        
+        # Observable registry
+        self._observables: Dict[str, np.ndarray] = {}
+        self._observable_funcs: Dict[str, Callable] = {}
+        
+        # Cache for computed observables
+        self._obs_cache: Dict[str, np.ndarray] = {}
+    
+    def _compute_eigenstates(self, n_eigenstates: int, compute_all: bool):
+        """固有状態を計算（一度だけ！）"""
+        
+        if compute_all or self.dim <= 1024:
+            # 厳密対角化
+            if self.use_gpu:
+                H_np = self.H.toarray().get() if hasattr(self.H, 'toarray') else self.H.get()
+            else:
+                H_np = self.H.toarray() if hasattr(self.H, 'toarray') else self.H
+            
+            E, V = np.linalg.eigh(H_np)
+            self.eigenvalues = E
+            self.eigenvectors = V
+            self.n_eigenstates = len(E)
+            
+        else:
+            # Lanczos法で低エネルギー状態のみ
+            k = n_eigenstates or min(100, self.dim - 2)
+            
+            if self.use_gpu:
+                H_cpu = self.H.get() if hasattr(self.H, 'get') else self.H
+            else:
+                H_cpu = self.H
+            
+            E, V = eigsh(H_cpu, k=k, which='SA')
+            idx = np.argsort(E)
+            self.eigenvalues = E[idx]
+            self.eigenvectors = V[:, idx]
+            self.n_eigenstates = k
+        
+        print(f"  ThermalEnsemble: {self.n_eigenstates} eigenstates computed")
+        print(f"  E_0 = {self.eigenvalues[0]:.6f}")
+        print(f"  E_1 = {self.eigenvalues[1]:.6f}")
+        print(f"  Gap = {self.eigenvalues[1] - self.eigenvalues[0]:.6f}")
+    
+    def register_observable(self, name: str, func: Callable[[np.ndarray], float]):
+        """
+        Register an observable function.
+        
+        The function takes a wavefunction and returns a scalar.
+        
+        Args:
+            name: Observable name (e.g., 'Q', 'S_phase', 'vorticity')
+            func: Function psi -> float
+        """
+        self._observable_funcs[name] = func
+        
+        # Compute for all eigenstates
+        values = np.zeros(self.n_eigenstates)
+        for n in range(self.n_eigenstates):
+            psi = self.eigenvectors[:, n]
+            values[n] = func(psi)
+        
+        self._obs_cache[name] = values
+        print(f"  Registered observable '{name}': computed for {self.n_eigenstates} states")
+    
+    def thermal_average(self, observable: str, T: float) -> ThermalObservable:
+        """
+        Compute thermal average of observable at temperature T.
+        
+        <O>(T) = Σ_n w_n(T) × O_n
+        
+        Args:
+            observable: Name of registered observable
+            T: Temperature (K)
+            
+        Returns:
+            ThermalObservable with value and variance
+        """
+        if observable not in self._obs_cache:
+            raise ValueError(f"Observable '{observable}' not registered. "
+                           f"Available: {list(self._obs_cache.keys())}")
+        
+        beta = T_to_beta(T)
+        weights = boltzmann_weights(self.eigenvalues, beta)
+        
+        O_values = self._obs_cache[observable]
+        
+        # Thermal average
+        O_avg = np.sum(weights * O_values)
+        
+        # Variance
+        O2_avg = np.sum(weights * O_values**2)
+        variance = O2_avg - O_avg**2
+        
+        return ThermalObservable(
+            T=T,
+            beta=beta,
+            value=O_avg,
+            variance=variance,
+            n_states=self.n_eigenstates
+        )
+    
+    def thermal_average_operator(self, O: Any, T: float) -> float:
+        """
+        Compute thermal average of an operator.
+        
+        <O>(T) = Σ_n w_n(T) × <n|O|n>
+        
+        Args:
+            O: Operator (sparse matrix)
+            T: Temperature (K)
+            
+        Returns:
+            float: Thermal average
+        """
+        beta = T_to_beta(T)
+        weights = boltzmann_weights(self.eigenvalues, beta)
+        
+        result = 0.0
+        for n in range(self.n_eigenstates):
+            if weights[n] < 1e-15:
+                continue
+            psi = self.eigenvectors[:, n]
+            O_nn = float(np.real(np.vdot(psi, O @ psi)))
+            result += weights[n] * O_nn
+        
+        return result
+    
+    def temperature_scan(self, 
+                         observable: str,
+                         T_range: Tuple[float, float] = (10, 1000),
+                         n_points: int = 50) -> Dict[str, np.ndarray]:
+        """
+        Scan temperature and compute thermal averages.
+        
+        Args:
+            observable: Name of registered observable
+            T_range: (T_min, T_max) in Kelvin
+            n_points: Number of temperature points
+            
+        Returns:
+            Dict with 'T', 'value', 'variance', 'd_value_dT'
+        """
+        T_values = np.linspace(T_range[0], T_range[1], n_points)
+        values = np.zeros(n_points)
+        variances = np.zeros(n_points)
+        
+        for i, T in enumerate(T_values):
+            result = self.thermal_average(observable, T)
+            values[i] = result.value
+            variances[i] = result.variance
+        
+        # Compute derivative (for phase transition detection)
+        d_value_dT = np.gradient(values, T_values)
+        
+        return {
+            'T': T_values,
+            'value': values,
+            'variance': variances,
+            'd_value_dT': d_value_dT
+        }
+    
+    def detect_phase_transition(self,
+                                 observable: str,
+                                 T_range: Tuple[float, float] = (10, 1000),
+                                 n_points: int = 100) -> Dict[str, Any]:
+        """
+        Detect phase transition from thermal average of observable.
+        
+        Phase transition = 急変点 = d<O>/dT の極値
+        
+        Args:
+            observable: Name of registered observable
+            T_range: Temperature range
+            n_points: Number of points
+            
+        Returns:
+            Dict with 'T_transition', 'type', 'scan_data'
+        """
+        scan = self.temperature_scan(observable, T_range, n_points)
+        
+        # Find maximum of |d<O>/dT|
+        abs_deriv = np.abs(scan['d_value_dT'])
+        idx_max = np.argmax(abs_deriv)
+        T_transition = scan['T'][idx_max]
+        
+        # Determine transition type
+        deriv_at_max = scan['d_value_dT'][idx_max]
+        if deriv_at_max > 0:
+            transition_type = 'increasing'
+        else:
+            transition_type = 'decreasing'
+        
+        return {
+            'T_transition': T_transition,
+            'type': transition_type,
+            'max_derivative': abs_deriv[idx_max],
+            'scan_data': scan
+        }
+    
+    # =========================================================================
+    # Thermodynamic quantities (computed correctly from ensemble)
+    # =========================================================================
+    
+    def free_energy(self, T: float) -> float:
+        """Helmholtz free energy F(T)."""
+        return compute_free_energy(self.eigenvalues, T_to_beta(T))
+    
+    def entropy(self, T: float) -> float:
+        """Entropy S(T)/k_B."""
+        return compute_entropy(self.eigenvalues, T_to_beta(T))
+    
+    def heat_capacity(self, T: float) -> float:
+        """Heat capacity C_V(T)/k_B."""
+        return compute_heat_capacity(self.eigenvalues, T_to_beta(T))
+    
+    def internal_energy(self, T: float) -> float:
+        """Internal energy <E>(T)."""
+        beta = T_to_beta(T)
+        weights = boltzmann_weights(self.eigenvalues, beta)
+        return np.sum(weights * self.eigenvalues)
+
+
+# =============================================================================
+# Winding / Phase Observables (for ThermalEnsemble)
+# =============================================================================
+
+def compute_winding_number(psi: np.ndarray) -> float:
+    """
+    Compute winding number from wavefunction phase.
+    
+    Q = (1/2π) Σ Δθ_i
+    """
+    theta = np.angle(psi)
+    n = len(theta)
+    total_phase = 0.0
+    
+    for i in range(n - 1):
+        dtheta = theta[i + 1] - theta[i]
+        # Wrap to [-π, π]
+        while dtheta > np.pi:
+            dtheta -= 2 * np.pi
+        while dtheta <= -np.pi:
+            dtheta += 2 * np.pi
+        total_phase += dtheta
+    
+    return total_phase / (2 * np.pi)
+
+
+def compute_phase_entropy(psi: np.ndarray, n_bins: int = 20) -> float:
+    """
+    Compute entropy of phase distribution.
+    
+    S = -Σ p_i log(p_i)
+    """
+    theta = np.angle(psi)
+    hist, _ = np.histogram(theta, bins=n_bins, range=(-np.pi, np.pi))
+    hist = hist / hist.sum()
+    mask = hist > 0
+    return -np.sum(hist[mask] * np.log(hist[mask]))
+
+
+def compute_vorticity(psi: np.ndarray, H_K: Any, H_V: Any) -> float:
+    """
+    Compute vorticity V = |K| + |V|.
+    
+    This is the "knot complexity" measure.
+    """
+    K = float(np.real(np.vdot(psi, H_K @ psi)))
+    V = float(np.real(np.vdot(psi, H_V @ psi)))
+    return abs(K) + abs(V)
+
+
+# =============================================================================
+# Dislocation (これは場なのでOK)
 # =============================================================================
 
 @dataclass
@@ -172,208 +516,37 @@ class Dislocation:
             self.site = new_site
 
 
-def compute_peach_koehler_force(dislocation: Dislocation, stress: float) -> float:
-    """
-    Compute Peach-Koehler force on dislocation.
-    
-    F = σ × b (simplified scalar form)
-    """
-    return stress * dislocation.burgers_magnitude
-
-
 # =============================================================================
-# Environment Operator Base
+# StressOperator (これは場なのでOK - ハミルトニアンに入れてよい)
 # =============================================================================
 
-class EnvironmentOperator:
+class StressOperator:
     """
-    Base class for environment operators B_θ.
+    Stress-dependent Hamiltonian modification.
     
-    H_total = H_0 + B_θ(H_0)
+    応力は「場」なのでハミルトニアンに入れてよい。
+    （温度とは違う！）
     
-    Subclasses implement specific environmental effects:
-      - TemperatureOperator: T → t(T), K_th
-      - StressOperator: σ → H_stress
-      - EMFieldOperator: B, E → ΔV_EM
-      - ChemicalOperator: 酸化、腐食 → ΔV_chem
+    K_mech = σ²/(2E)
     """
     
-    def __init__(self, engine: 'SparseEngine'):
-        """
-        Initialize environment operator.
-        
-        Args:
-            engine: SparseEngine instance
-        """
+    def __init__(self, engine: 'SparseEngine', Lx: int = None, Ly: int = None):
         self.engine = engine
         self.n_sites = engine.n_sites
         self.dim = engine.dim
         self.use_gpu = engine.use_gpu
         self.xp = engine.xp
-        self.sparse = engine.sparse
-    
-    def apply(self, H_K, H_V, **params):
-        """
-        Apply environment effect to Hamiltonian.
-        
-        Args:
-            H_K: Kinetic Hamiltonian
-            H_V: Potential Hamiltonian
-            **params: Environment parameters
-            
-        Returns:
-            (H_K_new, H_V_new): Modified Hamiltonians
-        """
-        raise NotImplementedError("Subclass must implement apply()")
-
-
-# =============================================================================
-# Temperature Operator (Θ_env_phys: T)
-# =============================================================================
-
-class TemperatureOperator(EnvironmentOperator):
-    """
-    Temperature-dependent Hamiltonian modification.
-    
-    H-CSP: Θ_env_phys の T 成分
-    
-    Physical models:
-      - Lattice expansion: t(T) = t₀(1 - α(T - T_ref)/T_ref)
-      - K_th = (3/2) k_B T
-      
-    【重要】温度は環境関手ではなく K_th への直接寄与
-    """
-    
-    def __init__(self, engine: 'SparseEngine',
-                 t0: float = 1.0,
-                 U0: float = 2.0,
-                 alpha_t: float = 1e-4,
-                 alpha_U: float = 0.0,
-                 T_ref: float = 300.0,
-                 T_melt: float = 1811.0):
-        """
-        Initialize temperature operator.
-        
-        Args:
-            engine: SparseEngine instance
-            t0: Base hopping at T_ref
-            U0: Base interaction at T_ref
-            alpha_t: Temperature coefficient for t
-            alpha_U: Temperature coefficient for U
-            T_ref: Reference temperature (K)
-            T_melt: Melting temperature (K)
-        """
-        super().__init__(engine)
-        self.t0 = t0
-        self.U0 = U0
-        self.alpha_t = alpha_t
-        self.alpha_U = alpha_U
-        self.T_ref = T_ref
-        self.T_melt = T_melt
-    
-    def t_eff(self, T: float) -> float:
-        """
-        Effective hopping t(T).
-        
-        t(T) = t₀ × (1 - α_t × (T - T_ref) / T_ref)
-        
-        Physical: Lattice expansion weakens bonds at high T
-        """
-        t = self.t0 * (1 - self.alpha_t * (T - self.T_ref) / self.T_ref)
-        return max(0.1 * self.t0, t)  # Floor at 10%
-    
-    def U_eff(self, T: float) -> float:
-        """
-        Effective interaction U(T).
-        
-        U(T) = U₀ × (1 - α_U × (T - T_ref) / T_ref)
-        """
-        U = self.U0 * (1 - self.alpha_U * (T - self.T_ref) / self.T_ref)
-        return max(0.1 * self.U0, U)
-    
-    def lambda_critical(self, T: float) -> float:
-        """
-        Temperature-dependent critical λ.
-        
-        λ_c(T) = λ_c,0 × (1 - T/T_melt)
-        """
-        if T >= self.T_melt:
-            return 0.0
-        return 0.5 * (1.0 - T / self.T_melt)
-    
-    def apply(self, H_K, H_V, geometry: 'SystemGeometry',
-              T: float = 300.0, **kwargs) -> Tuple:
-        """
-        Apply temperature effect.
-        
-        Rebuilds Hamiltonian with t(T) and U(T).
-        
-        Args:
-            H_K, H_V: Base Hamiltonians (ignored, rebuilt)
-            geometry: System geometry
-            T: Temperature (K)
-            
-        Returns:
-            (H_K_new, H_V_new)
-        """
-        t = self.t_eff(T)
-        U = self.U_eff(T)
-        
-        # Rebuild with temperature-dependent parameters
-        H_K_new, H_V_new = self.engine.build_hubbard_with_defects(
-            geometry,
-            t=t,
-            U=U,
-            t_weak=kwargs.get('t_weak', 0.3 * t),
-            vacancy_potential=kwargs.get('vacancy_potential', 100.0),
-            strain_coupling=kwargs.get('strain_coupling', 0.1),
-        )
-        
-        return H_K_new, H_V_new
-
-
-# =============================================================================
-# Stress Operator (Θ_env_phys: σ)
-# =============================================================================
-
-class StressOperator(EnvironmentOperator):
-    """
-    Stress-dependent Hamiltonian modification.
-    
-    H-CSP: Θ_env_phys の σ 成分
-    
-    K_mech = σ²/(2E)
-    
-    Adds stress gradient to potential energy.
-    """
-    
-    def __init__(self, engine: 'SparseEngine', Lx: int = None, Ly: int = None):
-        """
-        Initialize stress operator.
-        
-        Args:
-            engine: SparseEngine instance
-            Lx, Ly: Lattice dimensions (for stress gradient)
-        """
-        super().__init__(engine)
         self.Lx = Lx or int(np.sqrt(engine.n_sites))
         self.Ly = Ly or engine.n_sites // self.Lx
     
     def build_stress_hamiltonian(self, sigma: float) -> Any:
-        """
-        Build stress gradient Hamiltonian.
-        
-        H_stress = σ × Σ_i (x_i - L/2) × n_i
-        
-        Creates gradient in x-direction.
-        """
+        """Build stress gradient Hamiltonian."""
         xp = self.xp
         dim = self.dim
         n = self.n_sites
         
         diag = xp.zeros(dim, dtype=xp.float64)
         
-        # Only for tractable system sizes
         if n <= 16:
             for state in range(dim):
                 for site in range(n):
@@ -386,140 +559,93 @@ class StressOperator(EnvironmentOperator):
         else:
             return sp.diags(diag.astype(np.float64), format='csr', dtype=np.complex128)
     
-    def apply(self, H_K, H_V, sigma: float = 0.0, **kwargs) -> Tuple:
-        """
-        Apply stress effect.
-        
-        Args:
-            H_K, H_V: Base Hamiltonians
-            sigma: Applied stress
-            
-        Returns:
-            (H_K, H_V + H_stress)
-        """
+    def apply(self, H_K, H_V, sigma: float = 0.0) -> Tuple:
+        """Apply stress to Hamiltonian."""
         if abs(sigma) < 1e-10:
             return H_K, H_V
         
         H_stress = self.build_stress_hamiltonian(sigma)
-        H_V_new = H_V + H_stress
-        
-        return H_K, H_V_new
+        return H_K, H_V + H_stress
 
 
 # =============================================================================
-# Combined Environment Builder
+# DEPRECATED: TemperatureOperator (後方互換性のため残す)
+# =============================================================================
+
+class TemperatureOperator:
+    """
+    ⚠️ DEPRECATED: Do not use!
+    
+    This class modifies the Hamiltonian based on temperature,
+    which is physically incorrect.
+    
+    Use ThermalEnsemble instead:
+        ensemble = ThermalEnsemble(engine, H)
+        <O>(T) = ensemble.thermal_average('O', T)
+    
+    温度はハミルトニアンを変えるものではない！
+    温度は固有状態の重み分布を変えるもの！
+    """
+    
+    def __init__(self, engine: 'SparseEngine', **kwargs):
+        warnings.warn(
+            "TemperatureOperator is DEPRECATED and physically incorrect!\n"
+            "Temperature should NOT modify the Hamiltonian.\n"
+            "Use ThermalEnsemble instead:\n"
+            "  ensemble = ThermalEnsemble(engine, H)\n"
+            "  result = ensemble.thermal_average('observable', T)",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        self.engine = engine
+        self.t0 = kwargs.get('t0', 1.0)
+        self.U0 = kwargs.get('U0', 2.0)
+        self.alpha_t = kwargs.get('alpha_t', 1e-4)
+        self.T_ref = kwargs.get('T_ref', 300.0)
+    
+    def apply(self, *args, **kwargs):
+        raise NotImplementedError(
+            "TemperatureOperator.apply() is disabled.\n"
+            "Use ThermalEnsemble for correct finite-temperature calculations."
+        )
+
+
+# =============================================================================
+# EnvironmentBuilder (v2.0: 温度は分布で処理)
 # =============================================================================
 
 class EnvironmentBuilder:
     """
-    Combined environment operator builder.
+    Environment builder (v2.0).
     
-    Applies multiple environmental effects in sequence:
-      H_total = H_0 + ΔH(T) + ΔH(σ) + ΔH(B,E) + ...
+    【v2.0 変更点】
+    - 温度は ThermalEnsemble で処理
+    - ハミルトニアンに入れるのは「場」のみ（応力、電磁場など）
     
     Usage:
+        # Step 1: 基本ハミルトニアン
+        H_K, H_V = engine.build_hubbard(bonds, t=1.0, U=2.0)
+        
+        # Step 2: 場の効果を追加（応力など）
         builder = EnvironmentBuilder(engine)
-        H_K, H_V = builder.build(geometry, T=500, sigma=2.0)
+        H_K, H_V = builder.apply_stress(H_K, H_V, sigma=2.0)
+        
+        # Step 3: 有限温度は ThermalEnsemble で
+        ensemble = ThermalEnsemble(engine, H_K + H_V)
+        ensemble.register_observable('Q', compute_winding_number)
+        result = ensemble.thermal_average('Q', T=500)
     """
     
-    def __init__(self, engine: 'SparseEngine',
-                 t0: float = 1.0,
-                 U0: float = 2.0,
-                 alpha_t: float = 1e-4,
-                 T_ref: float = 300.0,
-                 T_melt: float = 1811.0,
-                 Lx: int = None,
-                 Ly: int = None):
-        """
-        Initialize environment builder.
-        
-        Args:
-            engine: SparseEngine instance
-            t0, U0: Base parameters
-            alpha_t: Temperature coefficient
-            T_ref: Reference temperature
-            T_melt: Melting temperature
-            Lx, Ly: Lattice dimensions
-        """
+    def __init__(self, engine: 'SparseEngine', Lx: int = None, Ly: int = None):
         self.engine = engine
-        self.n_sites = engine.n_sites
-        
-        # Temperature operator
-        self.temp_op = TemperatureOperator(
-            engine, t0=t0, U0=U0, alpha_t=alpha_t,
-            T_ref=T_ref, T_melt=T_melt
-        )
-        
-        # Stress operator
         self.stress_op = StressOperator(engine, Lx=Lx, Ly=Ly)
-        
-        # Store parameters
-        self.t0 = t0
-        self.U0 = U0
-        self.T_ref = T_ref
-        self.T_melt = T_melt
-        
-        # Dislocation management
         self.dislocations: List[Dislocation] = []
     
-    def build(self, geometry: 'SystemGeometry',
-              T: float = 300.0,
-              sigma: float = 0.0,
-              include_dislocations: bool = True,
-              **kwargs) -> Tuple:
-        """
-        Build complete environment-modified Hamiltonian.
-        
-        H(T, σ) = H_0(T) + H_stress(σ) + H_dislocation
-        
-        Args:
-            geometry: System geometry
-            T: Temperature (K)
-            sigma: Stress
-            include_dislocations: Include dislocation effects
-            **kwargs: Additional parameters
-            
-        Returns:
-            (H_K, H_V): Environment-modified Hamiltonians
-        """
-        # Apply temperature (rebuilds H with t(T), U(T))
-        H_K, H_V = self.temp_op.apply(None, None, geometry, T=T, **kwargs)
-        
-        # Mark dislocation sites as weak bonds
-        if include_dislocations and self.dislocations:
-            weak_bonds = list(getattr(geometry, 'weak_bonds', []) or [])
-            neighbors = self._build_neighbor_map(geometry)
-            
-            for disl in self.dislocations:
-                site = disl.site
-                for n in neighbors.get(site, []):
-                    bond = (min(site, n), max(site, n))
-                    if bond not in weak_bonds:
-                        weak_bonds.append(bond)
-            
-            geometry.weak_bonds = weak_bonds
-            
-            # Rebuild with updated weak bonds
-            H_K, H_V = self.temp_op.apply(None, None, geometry, T=T, **kwargs)
-        
-        # Apply stress
-        H_K, H_V = self.stress_op.apply(H_K, H_V, sigma=sigma)
-        
-        return H_K, H_V
+    def apply_stress(self, H_K, H_V, sigma: float) -> Tuple:
+        """Apply stress field to Hamiltonian."""
+        return self.stress_op.apply(H_K, H_V, sigma)
     
-    def _build_neighbor_map(self, geometry: 'SystemGeometry') -> Dict[int, List[int]]:
-        """Build neighbor map from geometry."""
-        neighbors = {i: [] for i in range(geometry.n_sites)}
-        for (i, j) in geometry.bonds:
-            neighbors[i].append(j)
-            neighbors[j].append(i)
-        return neighbors
-    
-    # -------------------------------------------------------------------------
-    # Dislocation Management
-    # -------------------------------------------------------------------------
-    
-    def add_dislocation(self, site: int,
+    def add_dislocation(self, site: int, 
                         burgers: Tuple[float, float, float] = (1, 0, 0)) -> Dislocation:
         """Add dislocation at site."""
         disl = Dislocation(site=site, burgers=burgers)
@@ -529,26 +655,6 @@ class EnvironmentBuilder:
     def clear_dislocations(self):
         """Remove all dislocations."""
         self.dislocations = []
-    
-    def get_dislocation_sites(self) -> List[int]:
-        """Get list of dislocation sites."""
-        return [d.site for d in self.dislocations]
-    
-    # -------------------------------------------------------------------------
-    # Convenience Methods
-    # -------------------------------------------------------------------------
-    
-    def t_eff(self, T: float) -> float:
-        """Get effective hopping at temperature T."""
-        return self.temp_op.t_eff(T)
-    
-    def U_eff(self, T: float) -> float:
-        """Get effective interaction at temperature T."""
-        return self.temp_op.U_eff(T)
-    
-    def lambda_critical(self, T: float) -> float:
-        """Get critical λ at temperature T."""
-        return self.temp_op.lambda_critical(T)
 
 
 # =============================================================================
@@ -557,43 +663,57 @@ class EnvironmentBuilder:
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("Environment Operators Test")
+    print("Environment Operators v2.0 Test")
     print("=" * 70)
     
-    # Test basic utilities
+    # Test thermodynamic utilities
     print("\n--- Thermodynamic Utilities ---")
     print(f"T=300K → β = {T_to_beta(300):.2f}")
     print(f"k_B T(300K) = {thermal_energy(300):.4f} eV")
     
-    # Test with SparseEngine
+    # Test ThermalEnsemble
     try:
         from memory_dft.core.sparse_engine_unified import SparseEngine
         
-        print("\n--- Environment Builder Test ---")
+        print("\n--- ThermalEnsemble Test ---")
         engine = SparseEngine(n_sites=4, use_gpu=False, verbose=False)
-        geometry = engine.build_square_with_defects(2, 2)
+        geometry = engine.build_chain(periodic=False)
         
-        builder = EnvironmentBuilder(engine, t0=1.0, U0=2.0)
+        # Build Hamiltonian (FIXED! 温度で変えない！)
+        H_K, H_V = engine.build_heisenberg(geometry.bonds, J=1.0)
+        H = H_K + H_V
         
-        # Test at different temperatures
-        for T in [300, 600, 1000]:
-            H_K, H_V = builder.build(geometry, T=T, sigma=0.0)
-            t = builder.t_eff(T)
-            print(f"  T={T}K: t_eff={t:.4f}")
+        # Create ensemble
+        ensemble = ThermalEnsemble(engine, H, compute_all=True)
         
-        # Test with stress
-        H_K, H_V = builder.build(geometry, T=300, sigma=2.0)
-        print(f"\n  With σ=2.0: H_V nnz = {H_V.nnz}")
+        # Register observables
+        ensemble.register_observable('Q', compute_winding_number)
+        ensemble.register_observable('S_phase', compute_phase_entropy)
         
-        # Test with dislocation
-        builder.add_dislocation(site=0)
-        H_K, H_V = builder.build(geometry, T=300, sigma=1.0)
-        print(f"  With dislocation: weak_bonds = {geometry.weak_bonds}")
+        # Temperature scan
+        print("\n--- Temperature Scan ---")
+        for T in [10, 100, 300, 500, 1000]:
+            Q = ensemble.thermal_average('Q', T)
+            S = ensemble.thermal_average('S_phase', T)
+            F = ensemble.free_energy(T)
+            print(f"  T={T:4d}K: <Q>={Q.value:.4f}, <S_phase>={S.value:.4f}, F={F:.4f}")
+        
+        # Phase transition detection
+        print("\n--- Phase Transition Detection ---")
+        result = ensemble.detect_phase_transition('S_phase', T_range=(10, 1000))
+        print(f"  T_transition = {result['T_transition']:.1f} K")
+        print(f"  Type: {result['type']}")
+        
+        # Test deprecated warning
+        print("\n--- Deprecated Warning Test ---")
+        try:
+            old_op = TemperatureOperator(engine)
+        except Exception as e:
+            print(f"  Caught: {type(e).__name__}")
         
         print("\n" + "=" * 70)
-        print("✅ Environment Operators Test Complete!")
+        print("✅ Environment Operators v2.0 Test Complete!")
         print("=" * 70)
         
     except ImportError as e:
         print(f"\n⚠️ SparseEngine not available: {e}")
-        print("Basic utilities tested successfully.")
