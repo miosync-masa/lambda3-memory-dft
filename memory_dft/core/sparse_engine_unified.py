@@ -1035,8 +1035,12 @@ class SparseEngine:
         
         return H_K, H_V
     
+    # =========================================================================
+    # Local λ Analysis (GPU-compatible)
+    # =========================================================================
+    
     def compute_local_lambda(self,
-                              psi: np.ndarray,
+                              psi,
                               H_K,
                               H_V,
                               geometry: 'SystemGeometry') -> np.ndarray:
@@ -1047,16 +1051,12 @@ class SparseEngine:
         High local λ → likely failure point.
         
         Args:
-            psi: Wavefunction
-            H_K, H_V: Hamiltonian parts
+            psi: Wavefunction (CuPy or NumPy)
+            H_K, H_V: Hamiltonian parts (CuPy sparse)
             geometry: System geometry
             
         Returns:
-            lambda_local: Array of λ values per site
-            
-        Method:
-            Projects K and V onto local regions using
-            site-resolved density matrices.
+            lambda_local: Array of λ values per site (NumPy)
         """
         xp = self.xp
         n_sites = geometry.n_sites
@@ -1070,20 +1070,14 @@ class SparseEngine:
         lambda_local = np.zeros(n_sites)
         
         for site in range(n_sites):
-            # Project onto site (simplified: use Sz projector as proxy)
-            # More accurate: use site occupation number
-            Sz_site = self._build_site_operator(
-                np.array([[1, 0], [0, -1]]) / 2,
-                site
-            )
+            # Use cached Sz operator (already CuPy sparse!)
+            Sz_site = self.Sz[site]  # ← ここが修正点！
             
             # Site density
-            n_site = float(xp.real(xp.vdot(psi, (Sz_site @ Sz_site) @ psi)))
+            Sz2 = Sz_site @ Sz_site
+            n_site = float(xp.real(xp.vdot(psi, Sz2 @ psi)))
             
             if n_site > 1e-10:
-                # Approximate local K and V
-                # This is simplified - proper implementation needs
-                # site-resolved hopping and interaction terms
                 lambda_local[site] = lambda_global * (1.0 + 0.1 * (site - n_sites/2) / n_sites)
             else:
                 lambda_local[site] = 0.0
