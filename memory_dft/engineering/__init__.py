@@ -36,23 +36,27 @@ from .base import (
     SolverResult,
     MaterialParams,
     ProcessConditions,
+    create_material,
 )
 
 from .thermo_mechanical import (
     ThermoMechanicalSolver,
     ThermoMechanicalResult,
     HeatTreatmentType,
+    HallPetchResult,
 )
 
 __all__ = [
-    # Base
+    # Base (DSE built-in!)
     'EngineeringSolver',
     'SolverResult',
     'MaterialParams',
     'ProcessConditions',
+    'create_material',
     
     # Thermo-Mechanical
     'ThermoMechanicalSolver',
     'ThermoMechanicalResult',
     'HeatTreatmentType',
+    'HallPetchResult',
 ]
