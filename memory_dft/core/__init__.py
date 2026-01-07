@@ -157,15 +157,45 @@ from memory_dft.core.environment_operators import (
     EnvironmentBuilder,
 )
 
-
 __all__ = [
+    # Version
+    '__version__',
+    
     # Core
     'MemoryKernel',
     'MemoryKernelConfig',
     'HistoryEntry',
+    
+    # Core - History
     'HistoryManager',
     'HistoryManagerGPU',
     'StateSnapshot',
     'LambdaDensityCalculator',
-
+    
+    # Core - Unified Sparse Engine (v0.5.0)
+    'SparseEngine',
+    'SystemGeometry',
+    'ComputeResult',
+    'SparseHamiltonianEngine',
+    
+    # Core - Backward Compatibility
+    'HubbardEngine',
+    'HubbardEngineCompat',
+    'HubbardResult',
+    'SpinOperators',
+    'SpinOperatorsCompat',
+    'pauli_matrices',
+    'create_spin_operators',
+    'compute_total_spin',
+    'compute_magnetization',
+    'compute_correlation',
+    'HamiltonianBuilder',
+    'build_hamiltonian',
+    
+    # Core - Lattice
+    'LatticeGeometry2D',
+    'LatticeGeometry',
+    'create_chain',
+    'create_ladder',
+    'create_square_lattice',
 ]
