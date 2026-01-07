@@ -1,792 +1,998 @@
 """
-Memory Kernels for Non-Markovian Density Functional Theory
-=========================================================
+Unified Memory Kernel for DSE (Direct Schrödinger Evolution)
+============================================================
 
-This module implements a physically motivated decomposition
-of memory kernels for Memory-DFT simulations.
+DSE の核心：履歴依存量子力学のためのメモリカーネル
 
-The total memory effect is represented as a weighted sum of
-four kernel components with distinct physical origins:
+【設計思想】
+  - 1クラスのみ（SimpleMemoryKernel, CompositeMemoryKernel 等を統合）
+  - γ_memory から全パラメータを第一原理的に導出
+  - GPU対応（CuPy）
 
-  1. Long-range field memory (power-law kernel)
-  2. Structural relaxation memory (stretched exponential)
-  3. Irreversible chemical memory (step / hysteretic)
-  4. Distance-direction memory (exclusion / repulsive)  [NEW]
+【物理】
+  K(t, τ) = K_base(t-τ) × D(dr/dτ) × I(τ, ψ)
+  
+  K_base: 時間減衰（power-law × exponential）
+  D:      方向依存因子（伸張 vs 圧縮の非対称性）
+  I:      アクティブウェイト（重要度 × コヒーレンス × エントロピー）
 
-Physical Insight (v0.4.0)
--------------------------
-The same distance r = 0.8 A has DIFFERENT meaning depending on
-whether the system is approaching or departing:
+【γ_memory の意味】
+  Vorticity 解析から：
+    γ_total  = 全相関（r=∞）
+    γ_local  = 局所相関（r≤2）
+    γ_memory = γ_total - γ_local = Non-Markovian 相関
+  
+  γ_memory > 0 → Memory Kernel が必要！
+  
+  Ref: Lie & Fullwood, PRL 135, 230204 (2025) - Markovian QSOTs
+       This work extends to Non-Markovian regime
 
-  - Approaching (r decreasing): preparing for compression
-  - Departing (r increasing): recovering from compression
+【対応する物理現象】
+  - Lindemann 融解則: δ → δ_L で E_a → 0
+  - Coffin-Manson 疲労則: 繰り返しによるエントロピー蓄積
+  - クリープ: 熱活性化 + 履歴効果
+  - 応力腐食割れ: 環境による V 低下 + 履歴
 
-DFT sees only r = 0.8 A (same).
-DSE sees the DIRECTION of change (different).
-
-This is why we need the exclusion kernel - it tracks the
-history of distance changes, not just the current distance.
-
-Theoretical Background
-----------------------
-The total correlation exponent is decomposed as
-
-    gamma_total = gamma_local + gamma_memory
-
-Representative values (Hubbard model, U/t = 2):
-  - gamma_total  (all distances)      = 2.604
-  - gamma_local  (short-range only)   = 1.388
-  - gamma_memory (difference)         = 1.216  (~47%)
-
-Reference:
-  S. H. Lie and J. Fullwood,
-  Phys. Rev. Lett. 135, 230204 (2025)
-
-Authors:
-  Masamichi Iizumi, Tamaki Iizumi
+Author: Masamichi Iizumi, Tamaki Iizumi
+Date: 2025-01
 """
 
 import numpy as np
-from abc import ABC, abstractmethod
-from typing import Optional, Union, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any, Union
 from dataclasses import dataclass, field
 
-# GPU support (optional)
+# GPU support
 try:
     import cupy as cp
     HAS_CUPY = True
 except ImportError:
-    cp = np
+    cp = None
     HAS_CUPY = False
 
+# Vorticity Calculator（本格版）
+try:
+    from vorticity import VorticityCalculator
+    HAS_VORTICITY = True
+except ImportError:
+    VorticityCalculator = None
+    HAS_VORTICITY = False
 
-# =============================================================================
-# Base Kernel Class
-# =============================================================================
-
-class MemoryKernelBase(ABC):
-    """
-    Abstract base class for temporal memory kernels.
-
-    A memory kernel K(t, tau) assigns a weight to past states
-    at time tau when evaluating the state at time t.
-    """
-    
-    @abstractmethod
-    def __call__(self, t: float, tau: float) -> float:
-        """Compute K(t, tau)"""
-        pass
-    
-    @abstractmethod
-    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
-        """Returns the weight vector for the entire history."""
-        pass
-    
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        pass
+# RDM Calculator（各 Hamiltonian 対応）
+try:
+    from rdm import compute_rdm2, get_rdm_calculator, RDM2Result, SystemType
+    HAS_RDM = True
+except ImportError:
+    compute_rdm2 = None
+    get_rdm_calculator = None
+    RDM2Result = None
+    SystemType = None
+    HAS_RDM = False
 
 
 # =============================================================================
-# Component 1: Power-Law Kernel (Field Memory)
+# Configuration
 # =============================================================================
 
-class PowerLawKernel(MemoryKernelBase):
-    """
-    Power-law memory kernel for field-induced correlations.
-
-    K(t - tau) = A / (t - tau + epsilon)^gamma
-
-    Physical characteristics:
-    - Scale-invariant temporal correlations
-    - Long-range memory
-    - Strongly non-Markovian behavior
-
-    Typical origins:
-    - Electromagnetic fields
-    - Collective electronic correlations
-    - Radiative environments
-    """
+@dataclass
+class MemoryKernelConfig:
+    """Memory Kernel の設定"""
+    # 基本パラメータ（γ_memory から導出可能）
+    gamma: float = 1.0          # 時間減衰の power-law 指数
+    tau0: float = 10.0          # 基本時定数
     
-    def __init__(self, gamma: float = 1.2, amplitude: float = 1.0, epsilon: float = 1.0):
-        self.gamma = gamma
-        self.amplitude = amplitude
-        self.epsilon = epsilon
+    # 方向依存パラメータ
+    alpha_stretch: float = 0.3  # 伸張時の増強係数
+    beta_compress: float = 0.1  # 圧縮時の減衰係数
+    
+    # アクティブウェイト
+    importance_scale: float = 1.0    # δ による重み付け強度
+    repetition_boost: float = 0.1    # 繰り返し増強係数
+    coherence_weight: float = 0.5    # コヒーレンス重み
+    entropy_weight: float = 0.3      # エントロピー重み
+    
+    # 履歴管理
+    max_history: int = 100           # 最大履歴数
+    similarity_threshold: float = 0.1  # 類似イベント判定閾値
+    
+    @classmethod
+    def from_gamma_memory(cls, gamma_memory: float) -> 'MemoryKernelConfig':
+        """
+        γ_memory から全パラメータを導出
         
-    def __call__(self, t: float, tau: float) -> float:
-        dt = t - tau + self.epsilon
-        return self.amplitude / (dt ** self.gamma)
-    
-    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
-        dt = t - history_times + self.epsilon
-        weights = self.amplitude / (dt ** self.gamma)
-        if weights.sum() > 0:
-            weights = weights / weights.sum()
-        return weights
-    
-    @property
-    def name(self) -> str:
-        return f"PowerLaw(gamma={self.gamma})"
+        γ_memory が大きい → 長距離相関が強い → 記憶効果が強い
+        """
+        return cls(
+            gamma=gamma_memory,
+            tau0=10.0 / (1.0 + 0.5 * gamma_memory),  # γ大 → τ小（早く減衰）
+            alpha_stretch=0.3 * gamma_memory,
+            beta_compress=0.1 * gamma_memory,
+            importance_scale=1.0 + 0.5 * gamma_memory,
+            coherence_weight=0.3 + 0.2 * gamma_memory,
+            entropy_weight=0.2 + 0.1 * gamma_memory,
+        )
 
 
 # =============================================================================
-# Component 2: Stretched Exponential Kernel (Structural Memory)
+# History Entry
 # =============================================================================
 
-class StretchedExpKernel(MemoryKernelBase):
+@dataclass
+class HistoryEntry:
+    """履歴の1エントリ"""
+    time: float                          # 時刻
+    position: float                      # 位置（結合長など）
+    velocity: float                      # 速度 dr/dt
+    state: Optional[np.ndarray] = None   # 状態ベクトル
+    energy: Optional[float] = None       # エネルギー
+    entropy: Optional[float] = None      # エントロピー（キャッシュ）
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# =============================================================================
+# Unified Memory Kernel
+# =============================================================================
+
+class MemoryKernel:
     """
-    Stretched exponential kernel for structural relaxation.
-
-    K(t - tau) = exp(-((t - tau) / tau0)^beta)
-
-    Physical characteristics:
-    - Non-exponential decay (glassy dynamics)
-    - Multiple relaxation timescales
-    - Partially non-Markovian
-
-    Typical origins:
-    - Structural relaxation
-    - Viscoelastic response
-    - Disorder-induced memory
-    """
+    統一 Memory Kernel（GPU対応）
     
-    def __init__(self, beta: float = 0.5, tau0: float = 10.0, amplitude: float = 1.0):
-        self.beta = beta
-        self.tau0 = tau0
-        self.amplitude = amplitude
+    DSE (Direct Schrödinger Evolution) の核心コンポーネント
+    
+    Features:
+    1. γ_memory から全パラメータを第一原理的に導出
+    2. 方向依存性：伸張と圧縮で非対称
+    3. アクティブウェイト：重要なイベントを長く記憶
+    4. 位相コヒーレンス：量子干渉効果
+    5. エントロピー：記憶の「乱れ」
+    6. GPU加速（CuPy）
+    
+    Usage:
+        # 方法1: Vorticity から構築（推奨）
+        kernel = MemoryKernel.from_vorticity(V_total, V_local, E_xc)
         
-    def __call__(self, t: float, tau: float) -> float:
-        dt = max(t - tau, 0)
-        return self.amplitude * np.exp(-((dt / self.tau0) ** self.beta))
-    
-    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
-        dt = np.maximum(t - history_times, 0)
-        weights = self.amplitude * np.exp(-((dt / self.tau0) ** self.beta))
-        if weights.sum() > 0:
-            weights = weights / weights.sum()
-        return weights
-    
-    @property
-    def name(self) -> str:
-        return f"StretchedExp(beta={self.beta}, tau0={self.tau0})"
-
-
-# =============================================================================
-# Component 3: Step Kernel (Chemical Memory)
-# =============================================================================
-
-class StepKernel(MemoryKernelBase):
-    """
-    Step (sigmoid) kernel for irreversible chemical memory.
-
-    K(t - tau) = A * sigmoid((t - tau - t_react) / width)
-
-    Physical characteristics:
-    - Irreversible memory
-    - Strong path dependence
-    - Non-commutative ordering effects
-
-    Typical origins:
-    - Chemical reactions
-    - Surface modification
-    - Oxidation, corrosion, bond formation
-    """
-    
-    def __init__(self, reaction_time: float = 5.0, amplitude: float = 1.0, 
-                 transition_width: float = 1.0):
-        self.reaction_time = reaction_time
-        self.amplitude = amplitude
-        self.transition_width = transition_width
+        # 方法2: γ_memory を直接指定
+        kernel = MemoryKernel(gamma_memory=1.2)
         
-    def __call__(self, t: float, tau: float) -> float:
-        dt = t - tau
-        x = (dt - self.reaction_time) / self.transition_width
-        return self.amplitude / (1 + np.exp(-x))
-    
-    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
-        dt = t - history_times
-        x = (dt - self.reaction_time) / self.transition_width
-        weights = self.amplitude / (1 + np.exp(-x))
-        if weights.sum() > 0:
-            weights = weights / weights.sum()
-        return weights
-    
-    @property
-    def name(self) -> str:
-        return f"Step(t_react={self.reaction_time})"
-
-
-# =============================================================================
-# Component 4: Exclusion Kernel (Distance-Direction Memory)
-# =============================================================================
-
-class ExclusionKernel(MemoryKernelBase):
-    """
-    Exclusion (repulsive) kernel for distance-direction memory.
-
-    K(dt) = exp(-dt / tau_rep) * [1 - exp(-dt / tau_recover)]
-
-    Physical insight:
-    The same distance r = 0.8 A means DIFFERENT things:
-      - Approaching: system is being compressed
-      - Departing: system is recovering from compression
-
-    DFT cannot distinguish these. DSE can!
-
-    Physical characteristics:
-    - Compression history affects current repulsion
-    - Elastic hysteresis
-    - Direction-dependent response
-
-    Typical origins:
-    - Pauli exclusion principle
-    - High-pressure compression
-    - White layer formation in machining
-    - AFM approach/retract curves
+        # 方法3: 設定オブジェクト
+        config = MemoryKernelConfig(gamma=1.5, tau0=8.0)
+        kernel = MemoryKernel(config=config)
+        
+        # 状態を追加
+        kernel.add_state(t=0.0, r=1.0, state=psi)
+        kernel.add_state(t=1.0, r=1.1, state=psi2)
+        
+        # メモリ寄与を計算
+        delta_E = kernel.compute_memory_contribution(t=2.0, current_state=psi3)
     """
     
-    def __init__(self, 
-                 tau_rep: float = 3.0, 
-                 tau_recover: float = 10.0,
-                 amplitude: float = 1.0):
+    def __init__(self,
+                 gamma_memory: float = 1.0,
+                 tau0: float = 10.0,
+                 config: Optional[MemoryKernelConfig] = None,
+                 use_gpu: bool = True):
         """
         Args:
-            tau_rep: Decay time for compression memory
-            tau_recover: Recovery time (elastic return)
-            amplitude: Amplitude coefficient
+            gamma_memory: Non-Markovian 相関指数（Vorticity から導出）
+            tau0: 基本時定数
+            config: 設定オブジェクト（指定時は gamma_memory, tau0 を上書き）
+            use_gpu: GPU使用フラグ
         """
-        self.tau_rep = tau_rep
-        self.tau_recover = tau_recover
-        self.amplitude = amplitude
+        # 設定
+        if config is not None:
+            self.config = config
+        else:
+            self.config = MemoryKernelConfig(gamma=gamma_memory, tau0=tau0)
         
-    def __call__(self, t: float, tau: float) -> float:
-        dt = t - tau
+        # GPU設定
+        self.use_gpu = use_gpu and HAS_CUPY
+        self.xp = cp if self.use_gpu else np
+        
+        # 履歴
+        self.history: List[HistoryEntry] = []
+        
+        # キャッシュ
+        self._coherence_cache: Optional[np.ndarray] = None
+        self._cache_valid = False
+    
+    # =========================================================================
+    # Factory Methods
+    # =========================================================================
+    
+    @classmethod
+    def from_vorticity(cls,
+                       V_total: float,
+                       V_local: float,
+                       E_xc: float,
+                       use_gpu: bool = True) -> 'MemoryKernel':
+        """
+        Vorticity から γ_memory を導出してインスタンス化
+        
+        【理論的背景】
+          α = |E_xc| / V ∝ N^(-γ)
+          
+          V_total: 全相関を含む Vorticity（距離フィルターなし）
+          V_local: 局所相関のみの Vorticity（max_range=2）
+          
+          γ_memory = f(α_total, α_local)
+        
+        Args:
+            V_total: 全相関 Vorticity
+            V_local: 局所相関 Vorticity
+            E_xc: 相関エネルギー
+            use_gpu: GPU使用フラグ
+            
+        Returns:
+            MemoryKernel インスタンス
+        """
+        # α 計算
+        alpha_total = abs(E_xc) / (V_total + 1e-10)
+        alpha_local = abs(E_xc) / (V_local + 1e-10)
+        
+        # γ_memory 導出
+        # α_local > α_total のとき、非局所相関が強い
+        if V_local > 1e-10 and V_total > 1e-10:
+            # Vorticity 比からγを推定
+            # V_total < V_local → 非局所がキャンセル → γ_memory 小
+            # V_total > V_local → 非局所が加算 → γ_memory 大
+            ratio = V_total / V_local
+            
+            if ratio > 1:
+                gamma_memory = np.log(ratio) * 2  # 非局所が支配的
+            else:
+                gamma_memory = (ratio - 0.5) * 2  # 局所が支配的だが記憶はある
+        else:
+            gamma_memory = 1.0  # デフォルト
+        
+        # 範囲制限
+        gamma_memory = float(np.clip(gamma_memory, 0.1, 3.0))
+        
+        # 設定生成
+        config = MemoryKernelConfig.from_gamma_memory(gamma_memory)
+        
+        return cls(config=config, use_gpu=use_gpu)
+    
+    @classmethod
+    def from_rdm2(cls,
+                  rdm2: np.ndarray,
+                  n_orb: int,
+                  E_xc: float,
+                  local_range: int = 2,
+                  distance_matrix: Optional[np.ndarray] = None,
+                  use_gpu: bool = True) -> 'MemoryKernel':
+        """
+        2-RDM から直接構築（本格版 VorticityCalculator 使用）
+        
+        内部で Vorticity を計算して γ_memory を導出
+        
+        Args:
+            rdm2: 2粒子密度行列 (n_orb, n_orb, n_orb, n_orb)
+            n_orb: 軌道数
+            E_xc: 相関エネルギー
+            local_range: 「局所」の定義（デフォルト: 2）
+            distance_matrix: 空間距離行列（分子系用、Noneならインデックス差）
+            use_gpu: GPU使用フラグ
+            
+        Note:
+            VorticityCalculator が利用可能な場合は本格版を使用
+            利用不可の場合は簡易版にフォールバック
+        """
+        if HAS_VORTICITY:
+            # 本格版 VorticityCalculator を使用
+            calc = VorticityCalculator(use_gpu=False)  # 内部計算はCPUで
+            decomp = calc.compute_gamma_decomposition(
+                rdm2, n_orb, E_xc,
+                local_range=local_range,
+                distance_matrix=distance_matrix
+            )
+            V_total = decomp['V_total']
+            V_local = decomp['V_local']
+        else:
+            # 簡易版にフォールバック
+            V_total = cls._compute_vorticity_simple(rdm2, n_orb, max_range=None)
+            V_local = cls._compute_vorticity_simple(rdm2, n_orb, max_range=local_range)
+        
+        return cls.from_vorticity(V_total, V_local, E_xc, use_gpu)
+    
+    @classmethod
+    def from_wavefunction(cls,
+                          psi: np.ndarray,
+                          n_sites: int,
+                          E_xc: float,
+                          system_type: str = 'hubbard',
+                          local_range: int = 2,
+                          use_gpu: bool = True,
+                          **kwargs) -> 'MemoryKernel':
+        """
+        波動関数から直接構築（各種 Hamiltonian 対応）
+        
+        内部で 2-RDM → Vorticity → γ_memory の全フローを実行
+        
+        Args:
+            psi: 正規化された波動関数
+            n_sites: サイト数
+            E_xc: 相関エネルギー
+            system_type: 'hubbard', 'heisenberg', 't-j', ...
+            local_range: 「局所」の定義
+            use_gpu: GPU使用フラグ
+            **kwargs: RDM 計算器への追加引数
+            
+        Example:
+            kernel = MemoryKernel.from_wavefunction(
+                psi, n_sites=6, E_xc=-0.5, system_type='hubbard'
+            )
+        """
+        if not HAS_RDM:
+            raise ImportError("rdm module not available. Use from_rdm2() instead.")
+        
+        # 2-RDM を計算
+        rdm_result = compute_rdm2(psi, system_type, n_sites=n_sites, **kwargs)
+        
+        # from_rdm2 に渡す
+        return cls.from_rdm2(
+            rdm_result.rdm2, 
+            rdm_result.n_orb, 
+            E_xc,
+            local_range=local_range,
+            distance_matrix=rdm_result.distance_matrix,
+            use_gpu=use_gpu
+        )
+    
+    @classmethod
+    def from_pyscf(cls,
+                   mf,
+                   method: str = 'ccsd',
+                   local_range: float = 3.0,
+                   use_gpu: bool = True) -> 'MemoryKernel':
+        """
+        PySCF 計算から直接構築
+        
+        Args:
+            mf: 収束済み PySCF SCF オブジェクト
+            method: 'ccsd' or 'fci'
+            local_range: 局所相関の距離閾値 [Å]
+            use_gpu: GPU使用フラグ
+            
+        Example:
+            from pyscf import gto, scf
+            mol = gto.M(atom='H 0 0 0; H 0 0 1.4', basis='sto-3g')
+            mf = scf.RHF(mol).run()
+            kernel = MemoryKernel.from_pyscf(mf, method='ccsd')
+        """
+        if not HAS_RDM:
+            raise ImportError("rdm module not available")
+        
+        from rdm import PySCFRDM
+        
+        # 2-RDM を計算
+        calc = PySCFRDM()
+        rdm_result = calc.compute_rdm2(mf, method=method)
+        
+        # 相関エネルギーを取得
+        if method == 'ccsd':
+            from pyscf import cc
+            mycc = cc.CCSD(mf)
+            mycc.kernel()
+            E_xc = mycc.e_corr
+        else:
+            from pyscf import fci
+            cisolver = fci.FCI(mf)
+            E_fci, _ = cisolver.kernel()
+            E_xc = E_fci - mf.e_tot
+        
+        # from_rdm2 に渡す
+        return cls.from_rdm2(
+            rdm_result.rdm2,
+            rdm_result.n_orb,
+            E_xc,
+            local_range=local_range,
+            distance_matrix=rdm_result.distance_matrix,
+            use_gpu=use_gpu
+        )
+    
+    @staticmethod
+    def _compute_vorticity_simple(rdm2: np.ndarray, 
+                                   n_orb: int, 
+                                   max_range: Optional[int] = None,
+                                   svd_cut: float = 0.95) -> float:
+        """
+        簡易 Vorticity 計算
+        
+        V = √(Σ ||J - J^T||²)
+        J = M_λ @ ∇M_λ
+        """
+        # 距離フィルター
+        if max_range is not None:
+            rdm2_filtered = np.zeros_like(rdm2)
+            for i in range(n_orb):
+                for j in range(n_orb):
+                    for k in range(n_orb):
+                        for l in range(n_orb):
+                            max_d = max(abs(i-j), abs(k-l), abs(i-k), abs(j-l))
+                            if max_d <= max_range:
+                                rdm2_filtered[i,j,k,l] = rdm2[i,j,k,l]
+            rdm2 = rdm2_filtered
+        
+        # 行列形式
+        M = rdm2.reshape(n_orb**2, n_orb**2)
+        
+        # SVD
+        U, S, Vt = np.linalg.svd(M, full_matrices=False)
+        
+        total_var = np.sum(S**2)
+        if total_var < 1e-14:
+            return 0.0
+        
+        cumvar = np.cumsum(S**2) / total_var
+        k = int(np.searchsorted(cumvar, svd_cut) + 1)
+        k = max(2, min(k, len(S)))
+        
+        # Λ空間射影
+        S_proj = U[:, :k]
+        M_lambda = S_proj.T @ M @ S_proj
+        
+        # 勾配
+        grad_M = np.zeros_like(M_lambda)
+        grad_M[:-1, :] = M_lambda[1:, :] - M_lambda[:-1, :]
+        
+        # 電流と Vorticity
+        J = M_lambda @ grad_M
+        curl_J = J - J.T
+        V = float(np.sqrt(np.sum(curl_J**2)))
+        
+        return V
+    
+    # =========================================================================
+    # State Management
+    # =========================================================================
+    
+    def add_state(self,
+                  t: float,
+                  r: float,
+                  state: Optional[np.ndarray] = None,
+                  energy: Optional[float] = None,
+                  **metadata):
+        """
+        状態を履歴に追加
+        
+        Args:
+            t: 時刻
+            r: 位置（結合長、変位など）
+            state: 状態ベクトル（オプション）
+            energy: エネルギー（オプション）
+            **metadata: その他のメタデータ
+        """
+        # 速度計算
+        if len(self.history) > 0:
+            prev = self.history[-1]
+            dt = t - prev.time
+            if dt > 1e-10:
+                velocity = (r - prev.position) / dt
+            else:
+                velocity = 0.0
+        else:
+            velocity = 0.0
+        
+        # エントリ作成
+        entry = HistoryEntry(
+            time=t,
+            position=r,
+            velocity=velocity,
+            state=state.copy() if state is not None else None,
+            energy=energy,
+            metadata=metadata
+        )
+        
+        # エントロピー計算（状態があれば）
+        if state is not None:
+            entry.entropy = self.compute_state_entropy(state)
+        
+        self.history.append(entry)
+        
+        # 履歴制限
+        if len(self.history) > self.config.max_history:
+            self.history = self.history[-self.config.max_history:]
+        
+        # キャッシュ無効化
+        self._cache_valid = False
+    
+    def clear(self):
+        """履歴クリア"""
+        self.history.clear()
+        self._coherence_cache = None
+        self._cache_valid = False
+    
+    # =========================================================================
+    # Core Kernel Functions
+    # =========================================================================
+    
+    def kernel_base(self, dt: float) -> float:
+        """
+        基本カーネル K_base(dt)
+        
+        K_base = (dt + ε)^(-γ) × exp(-dt/τ₀)
+        
+        Power-law: 長時間相関（γ が大きいほど早く減衰）
+        Exponential: カットオフ（τ₀ で特徴時間）
+        """
         if dt <= 0:
             return 0.0
         
-        decay = np.exp(-dt / self.tau_rep)
-        recovery = 1.0 - np.exp(-dt / self.tau_recover)
+        gamma = self.config.gamma
+        tau0 = self.config.tau0
         
-        return self.amplitude * decay * recovery
-    
-    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
-        dt = t - history_times
-        dt = np.maximum(dt, 1e-10)  # Avoid division issues
+        # Power-law（特異点回避）
+        power = (dt + 0.1) ** (-gamma)
         
-        decay = np.exp(-dt / self.tau_rep)
-        recovery = 1.0 - np.exp(-dt / self.tau_recover)
+        # Exponential cutoff
+        exp_cut = np.exp(-dt / tau0)
         
-        weights = self.amplitude * decay * recovery
-        weights = np.maximum(weights, 0)
-        
-        if weights.sum() > 0:
-            weights = weights / weights.sum()
-        return weights
+        return power * exp_cut
     
-    @property
-    def name(self) -> str:
-        return f"Exclusion(tau_rep={self.tau_rep}, tau_recover={self.tau_recover})"
-
-
-# =============================================================================
-# Kernel Weights (4 Components)
-# =============================================================================
-
-@dataclass
-class KernelWeights:
-    """
-    Relative weights of different physical memory channels.
-
-    The weights reflect the relative importance of:
-      - field: long-range field effects
-      - phys: structural relaxation
-      - chem: chemical irreversibility
-      - exclusion: distance-direction (compression/expansion)
-    """
-    field: float = 0.30       # Power-law (field)
-    phys: float = 0.25        # Stretched exp (structure)
-    chem: float = 0.25        # Step (chemical)
-    exclusion: float = 0.20   # Exclusion (distance direction) [NEW]
-    
-    def normalize(self):
-        """Normalize weights to sum to 1."""
-        total = self.field + self.phys + self.chem + self.exclusion
-        if total > 0:
-            self.field /= total
-            self.phys /= total
-            self.chem /= total
-            self.exclusion /= total
-    
-    def to_dict(self) -> dict:
-        """Convert to dictionary."""
-        return {
-            'field': self.field,
-            'phys': self.phys,
-            'chem': self.chem,
-            'exclusion': self.exclusion
-        }
-
-
-# =============================================================================
-# Composite Memory Kernel (4 Components - Unified)
-# =============================================================================
-
-class CompositeMemoryKernel:
-    """
-    Composite memory kernel with four physical components.
-
-    The total kernel is constructed as:
-
-        K(t - tau) = w_field * K_field
-                   + w_phys  * K_phys
-                   + w_chem  * K_chem
-                   + w_excl  * K_exclusion   [NEW in v0.4.0]
-
-    This additive structure allows independent control of
-    distinct physical sources of non-Markovianity:
-
-      1. Field: Long-range correlations (power-law)
-      2. Phys: Structural relaxation (stretched exp)
-      3. Chem: Irreversible reactions (step)
-      4. Exclusion: Distance-direction memory (compression history)
-
-    The exclusion component is key for understanding why
-    the same distance can have different physical meaning
-    depending on whether the system is approaching or departing.
-    """
-    
-    def __init__(self, 
-                 weights: Optional[KernelWeights] = None,
-                 # Field kernel params
-                 gamma_field: float = 1.216,
-                 # Phys kernel params
-                 beta_phys: float = 0.5,
-                 tau0_phys: float = 10.0,
-                 # Chem kernel params
-                 t_react_chem: float = 5.0,
-                 # Exclusion kernel params [NEW]
-                 include_exclusion: bool = True,
-                 tau_rep: float = 3.0,
-                 tau_recover: float = 10.0):
+    def direction_factor(self, velocity: float) -> float:
         """
-        Args:
-            weights: Component weights (default: balanced 4-component)
-            gamma_field: Power-law exponent (default: 1.216 from ED)
-            beta_phys: Stretched exp exponent
-            tau0_phys: Structural relaxation time
-            t_react_chem: Chemical reaction time
-            include_exclusion: Whether to include exclusion kernel
-            tau_rep: Exclusion decay time
-            tau_recover: Exclusion recovery time
+        方向依存因子 D(v)
+        
+        伸張（v > 0）: 傷が蓄積 → 係数増加
+        圧縮（v < 0）: 回復    → 係数減少
+        
+        【物理的根拠】
+          伸張: 結合が弱まる → 電子が局所化 → 相関変化が大きい
+          圧縮: 結合が強まる → 電子が非局所化 → 相関が回復
         """
-        self.weights = weights or KernelWeights()
-        self.include_exclusion = include_exclusion
+        alpha = self.config.alpha_stretch
+        beta = self.config.beta_compress
         
-        # Adjust weights if exclusion is disabled
-        if not include_exclusion:
-            self.weights.exclusion = 0.0
-        
-        self.weights.normalize()
-        
-        # Build component kernels
-        self.K_field = PowerLawKernel(gamma=gamma_field)
-        self.K_phys = StretchedExpKernel(beta=beta_phys, tau0=tau0_phys)
-        self.K_chem = StepKernel(reaction_time=t_react_chem)
-        self.K_exclusion = ExclusionKernel(tau_rep=tau_rep, tau_recover=tau_recover)
-        
-    def __call__(self, t: float, tau: float) -> float:
-        """Compute composite kernel value."""
-        result = (
-            self.weights.field * self.K_field(t, tau) +
-            self.weights.phys * self.K_phys(t, tau) +
-            self.weights.chem * self.K_chem(t, tau)
-        )
-        
-        if self.include_exclusion:
-            result += self.weights.exclusion * self.K_exclusion(t, tau)
-        
-        return result
+        if velocity > 0:
+            # 伸張：tanh で飽和（無限大にならない）
+            return 1.0 + alpha * np.tanh(velocity)
+        else:
+            # 圧縮：減衰
+            return 1.0 - beta * np.tanh(-velocity)
     
-    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
-        """Compute integrated weights for history."""
-        w_field = self.K_field.integrate(t, history_times)
-        w_phys = self.K_phys.integrate(t, history_times)
-        w_chem = self.K_chem.integrate(t, history_times)
-        
-        combined = (
-            self.weights.field * w_field +
-            self.weights.phys * w_phys +
-            self.weights.chem * w_chem
-        )
-        
-        if self.include_exclusion:
-            w_excl = self.K_exclusion.integrate(t, history_times)
-            combined += self.weights.exclusion * w_excl
-        
-        # Normalize
-        if combined.sum() > 0:
-            combined = combined / combined.sum()
-            
-        return combined
+    # =========================================================================
+    # Active Memory Weights
+    # =========================================================================
     
-    def decompose(self, t: float, history_times: np.ndarray) -> dict:
-        """Decompose kernel into components (for diagnostics)."""
-        result = {
-            'field': self.weights.field * self.K_field.integrate(t, history_times),
-            'phys': self.weights.phys * self.K_phys.integrate(t, history_times),
-            'chem': self.weights.chem * self.K_chem.integrate(t, history_times),
-        }
-        
-        if self.include_exclusion:
-            result['exclusion'] = self.weights.exclusion * self.K_exclusion.integrate(t, history_times)
-        
-        result['total'] = self.integrate(t, history_times)
-        
-        return result
-    
-    @property
-    def name(self) -> str:
-        return "CompositeMemoryKernel"
-    
-    def __repr__(self) -> str:
-        components = [
-            f"  weights: field={self.weights.field:.2f}, phys={self.weights.phys:.2f}, "
-            f"chem={self.weights.chem:.2f}, exclusion={self.weights.exclusion:.2f}",
-            f"  {self.K_field.name}",
-            f"  {self.K_phys.name}",
-            f"  {self.K_chem.name}",
-        ]
-        
-        if self.include_exclusion:
-            components.append(f"  {self.K_exclusion.name}")
-        
-        return "CompositeMemoryKernel(\n" + "\n".join(components) + "\n)"
-
-
-# =============================================================================
-# GPU-accelerated Composite Kernel
-# =============================================================================
-
-class CompositeMemoryKernelGPU:
-    """
-    GPU-accelerated implementation of the composite memory kernel.
-    
-    Designed for large-scale simulations where long history
-    windows and fine time resolution are required.
-    """
-    
-    def __init__(self, 
-                 weights: Optional[KernelWeights] = None,
-                 gamma_field: float = 1.0,
-                 beta_phys: float = 0.5,
-                 tau0_phys: float = 10.0,
-                 t_react_chem: float = 5.0,
-                 tau_rep: float = 3.0,
-                 tau_recover: float = 10.0,
-                 include_exclusion: bool = True,
-                 epsilon: float = 1.0):
-        
-        self.weights = weights or KernelWeights()
-        if not include_exclusion:
-            self.weights.exclusion = 0.0
-        self.weights.normalize()
-        
-        self.gamma_field = gamma_field
-        self.beta_phys = beta_phys
-        self.tau0_phys = tau0_phys
-        self.t_react_chem = t_react_chem
-        self.tau_rep = tau_rep
-        self.tau_recover = tau_recover
-        self.include_exclusion = include_exclusion
-        self.epsilon = epsilon
-        
-    def integrate_gpu(self, t: float, history_times) -> 'cp.ndarray':
-        """GPU-accelerated history weight computation."""
-        dt = t - history_times
-        
-        # Power-law (field)
-        w_field = 1.0 / ((dt + self.epsilon) ** self.gamma_field)
-        
-        # Stretched exp (phys)
-        dt_positive = cp.maximum(dt, 0)
-        w_phys = cp.exp(-((dt_positive / self.tau0_phys) ** self.beta_phys))
-        
-        # Step (chem)
-        x = (dt - self.t_react_chem)
-        w_chem = 1.0 / (1.0 + cp.exp(-x))
-        
-        # Normalize each
-        w_field = w_field / (w_field.sum() + 1e-10)
-        w_phys = w_phys / (w_phys.sum() + 1e-10)
-        w_chem = w_chem / (w_chem.sum() + 1e-10)
-        
-        # Combine
-        combined = (
-            self.weights.field * w_field +
-            self.weights.phys * w_phys +
-            self.weights.chem * w_chem
-        )
-        
-        # Exclusion kernel
-        if self.include_exclusion:
-            dt_safe = cp.maximum(dt, 1e-10)
-            decay = cp.exp(-dt_safe / self.tau_rep)
-            recovery = 1.0 - cp.exp(-dt_safe / self.tau_recover)
-            w_excl = decay * recovery
-            w_excl = cp.maximum(w_excl, 0)
-            w_excl = w_excl / (w_excl.sum() + 1e-10)
-            combined += self.weights.exclusion * w_excl
-        
-        return combined / (combined.sum() + 1e-10)
-
-
-# =============================================================================
-# Repulsive Memory Kernel (Distance-based)
-# =============================================================================
-
-class RepulsiveMemoryKernel:
-    """
-    Repulsive memory kernel for compression hysteresis.
-    
-    Uses ExclusionKernel internally for temporal memory effects.
-    
-    Physics: When atoms are compressed, they "remember" the compression
-    and show enhanced repulsion during expansion (hysteresis).
-    
-    V_eff(r, t) = V_bare(r) × [1 + enhancement(history)]
-    
-    The enhancement depends on:
-    - How close we got (minimum r in history)
-    - How recently (ExclusionKernel decay)
-    
-    Key insight:
-    Same r, different history → different V_eff!
-    This is what DFT cannot capture but DSE can.
-    """
-    
-    def __init__(self, 
-                 eta_rep: float = 0.2, 
-                 tau_rep: float = 3.0,
-                 tau_recover: float = 10.0, 
-                 r_critical: float = 0.8,
-                 n_power: float = 12.0):
+    def compute_delta_weight(self, idx: int) -> float:
         """
-        Args:
-            eta_rep: Memory strength coefficient
-            tau_rep: Decay time for compression memory
-            tau_recover: Recovery time (elastic return)
-            r_critical: Critical distance for compression activation
-            n_power: Power for bare repulsion (r^-n)
+        δ（変位）による重み
+        
+        大きい変位 → 重要 → 長く記憶
+        小さい変位 → 忘れやすい
         """
-        self.eta_rep = eta_rep
-        self.tau_rep = tau_rep
-        self.tau_recover = tau_recover
-        self.r_critical = r_critical
-        self.n_power = n_power
+        if idx >= len(self.history):
+            return 1.0
         
-        # Use ExclusionKernel for temporal weighting
-        self._exclusion_kernel = ExclusionKernel(
-            tau_rep=tau_rep,
-            tau_recover=tau_recover,
-            amplitude=1.0
-        )
+        entry = self.history[idx]
+        scale = self.config.importance_scale
         
-        self.compression_history: List[Tuple[float, float]] = []  # [(t, r), ...]
-        self.state_history: List[Tuple[float, float, Optional[np.ndarray]]] = []
-        self.r_min_history = float('inf')
+        return 1.0 + scale * abs(entry.velocity)
     
-    def add_state(self, t: float, r: float, psi: Optional[np.ndarray] = None):
-        """Record state at time t with distance r."""
-        self.state_history.append((t, r, psi))
-        self.compression_history.append((t, r))
-        if r < self.r_min_history:
-            self.r_min_history = r
-    
-    def compute_repulsion_enhancement(self, t: float, r: float) -> float:
+    def count_similar_events(self, idx: int) -> int:
         """
-        Compute memory-based enhancement using ExclusionKernel.
+        類似イベントの数をカウント（疲労累積）
         
-        Enhancement is higher when:
-        1. We compressed below r_critical
-        2. The compression was recent (ExclusionKernel decay)
+        同じ方向・同じ大きさの変位の繰り返し
         """
-        if not self.compression_history:
-            return 0.0
+        if idx >= len(self.history):
+            return 0
         
-        enhancement = 0.0
+        target = self.history[idx]
+        threshold = self.config.similarity_threshold
         
-        for t_past, r_past in self.compression_history:
-            # Only count compressions below critical distance
-            if r_past < self.r_critical:
-                # Compression severity
-                compression_depth = (self.r_critical - r_past) / self.r_critical
-                
-                # Use ExclusionKernel for temporal weighting
-                kernel_weight = self._exclusion_kernel(t, t_past)
-                
-                enhancement += self.eta_rep * compression_depth * kernel_weight
-        
-        return enhancement
-    
-    def compute_effective_repulsion(self, r: float, t: float) -> float:
-        """
-        Compute effective repulsion with memory enhancement.
-        
-        V_eff = V_bare × (1 + enhancement)
-        
-        Same r, different history → different V_eff!
-        """
-        V_bare = 1.0 / (r ** self.n_power)
-        enhancement = self.compute_repulsion_enhancement(t, r)
-        return V_bare * (1.0 + enhancement)
-    
-    def clear(self):
-        """Reset all history."""
-        self.compression_history = []
-        self.state_history = []
-        self.r_min_history = float('inf')
-
-
-# =============================================================================
-# Catalyst Memory Kernel (Specialized)
-# =============================================================================
-
-@dataclass
-class CatalystEvent:
-    """Catalyst reaction event."""
-    event_type: str  # 'adsorption', 'reaction', 'desorption'
-    time: float
-    site: int
-    strength: float
-
-
-class CatalystMemoryKernel:
-    """
-    Memory kernel specialized for catalytic systems.
-
-    Encodes reaction history and order effects, including:
-      - adsorption -> reaction: activation enhancement
-      - reaction -> adsorption: deactivation or poisoning
-
-    This kernel explicitly captures non-commutative
-    reaction pathways.
-    """
-    
-    def __init__(self, 
-                 eta: float = 0.3,
-                 tau_ads: float = 2.0,
-                 tau_react: float = 5.0):
-        self.eta = eta
-        self.tau_ads = tau_ads
-        self.tau_react = tau_react
-        self.events: List[CatalystEvent] = []
-        self.state_history: List[Tuple[float, float, np.ndarray]] = []
-    
-    def add_event(self, event: CatalystEvent):
-        """Record a catalyst event."""
-        self.events.append(event)
-        if len(self.events) > 100:
-            self.events = self.events[-100:]
-    
-    def add_state(self, t: float, lambda_val: float, psi: np.ndarray):
-        """Record state for overlap calculations."""
-        self.state_history.append((t, lambda_val, psi.copy()))
-        if len(self.state_history) > 100:
-            self.state_history = self.state_history[-100:]
-    
-    def compute_catalyst_memory(self, t: float) -> float:
-        """Compute catalyst memory contribution."""
-        if len(self.events) == 0:
-            return 0.0
-        
-        memory = 0.0
-        
-        for event in self.events:
-            dt = t - event.time
-            if dt <= 0:
+        count = 0
+        for i, entry in enumerate(self.history):
+            if i == idx:
                 continue
             
-            if event.event_type == 'adsorption':
-                kernel = np.exp(-dt / self.tau_ads)
-            elif event.event_type == 'reaction':
-                kernel = np.exp(-dt / self.tau_react) * (1 + 0.5 * dt)
-            else:
-                kernel = np.exp(-dt / self.tau_ads) * 0.5
+            # 同じ方向か
+            same_dir = entry.velocity * target.velocity > 0
             
-            memory += self.eta * kernel * event.strength
+            # 大きさが近いか
+            similar_mag = abs(abs(entry.velocity) - abs(target.velocity)) < threshold
+            
+            if same_dir and similar_mag:
+                count += 1
         
-        return memory
+        return count
     
-    def compute_memory_contribution(self, t: float, psi: np.ndarray) -> float:
+    def compute_repetition_weight(self, idx: int) -> float:
         """
-        Compute memory contribution (compatible with SimpleMemoryKernel API).
+        繰り返しによる重み増強（疲労）
         
-        Combines catalyst event memory with state overlap effects.
+        同じサイクルが繰り返される → 累積効果 → 重み増加
         """
-        # Base catalyst memory from events
-        catalyst_mem = self.compute_catalyst_memory(t)
+        n_similar = self.count_similar_events(idx)
+        boost = self.config.repetition_boost
         
-        # Add state overlap contribution if history available
-        overlap_contribution = 0.0
-        if len(self.state_history) > 0 and psi is not None:
-            for t_hist, lambda_hist, psi_hist in self.state_history[-10:]:
-                dt = t - t_hist
-                if dt <= 0:
-                    continue
-                overlap = abs(np.vdot(psi, psi_hist))**2
-                kernel = np.exp(-dt / self.tau_react)
-                overlap_contribution += self.eta * 0.5 * kernel * lambda_hist * overlap
+        return 1.0 + boost * n_similar
+    
+    # =========================================================================
+    # Coherence (Quantum Phase)
+    # =========================================================================
+    
+    def compute_coherence(self, current_state: np.ndarray) -> np.ndarray:
+        """
+        各履歴点との位相コヒーレンスを計算
         
-        return catalyst_mem + overlap_contribution
+        coherence[i] = |Re[⟨ψ|ψᵢ⟩]| / |⟨ψ|ψᵢ⟩|
+        
+        位相が揃っていれば 1 に近い
+        位相が π ずれていれば 0 に近い
+        
+        【物理的意味】
+          高コヒーレンス: 量子干渉が効く → 「鮮明な記憶」
+          低コヒーレンス: 干渉が消える → 「ぼやけた記憶」
+        """
+        if current_state is None or len(self.history) == 0:
+            return np.ones(len(self.history))
+        
+        xp = self.xp
+        coherences = []
+        
+        for entry in self.history:
+            if entry.state is None:
+                coherences.append(1.0)
+                continue
+            
+            # 内積
+            if self.use_gpu:
+                cs = cp.asarray(current_state)
+                hs = cp.asarray(entry.state)
+                inner = cp.vdot(cs, hs)
+                inner = complex(cp.asnumpy(inner))
+            else:
+                inner = np.vdot(current_state, entry.state)
+            
+            magnitude = abs(inner)
+            
+            if magnitude < 1e-10:
+                coherences.append(0.0)
+                continue
+            
+            # 位相の揃い具合: |cos(φ)|
+            phase_alignment = abs(inner.real) / magnitude
+            coherences.append(float(phase_alignment))
+        
+        return np.array(coherences)
     
-    def clear(self):
-        """Clear event history."""
-        self.events = []
-        self.state_history = []
-
-
-# =============================================================================
-# Simple Memory Kernel (Lightweight)
-# =============================================================================
-
-class SimpleMemoryKernel:
-    """
-    Simple memory kernel for quick testing.
+    def compute_collective_coherence(self) -> float:
+        """
+        履歴全体の集団的コヒーレンス
+        
+        C = |Σ e^(iφᵢⱼ)|² / N_pairs²
+        
+        全ての位相が揃っていれば C ≈ 1
+        ランダムなら C → 0
+        
+        【疲労との関係】
+          同じサイクルの繰り返し → 位相揃う → C 高 → 累積効果大
+          ランダムな変動 → 位相バラバラ → C 低 → 累積効果小
+        """
+        states = [e.state for e in self.history if e.state is not None]
+        if len(states) < 2:
+            return 1.0
+        
+        xp = self.xp
+        phase_sum = 0.0 + 0.0j
+        n_pairs = 0
+        
+        for i in range(len(states)):
+            for j in range(i + 1, len(states)):
+                if self.use_gpu:
+                    si = cp.asarray(states[i])
+                    sj = cp.asarray(states[j])
+                    inner = complex(cp.asnumpy(cp.vdot(si, sj)))
+                else:
+                    inner = np.vdot(states[i], states[j])
+                
+                if abs(inner) > 1e-10:
+                    phase_sum += inner / abs(inner)  # 位相のみ
+                    n_pairs += 1
+        
+        if n_pairs == 0:
+            return 1.0
+        
+        C = abs(phase_sum) ** 2 / (n_pairs ** 2)
+        return float(C)
     
-    Combines exponential decay with a weak polynomial correction.
-    """
+    def compute_coherence_weight(self, idx: int, current_state: np.ndarray = None) -> float:
+        """
+        コヒーレンスに基づく重み
+        """
+        if current_state is None:
+            return 1.0
+        
+        coherences = self.compute_coherence(current_state)
+        if idx < len(coherences):
+            coh = coherences[idx]
+        else:
+            coh = 1.0
+        
+        w = self.config.coherence_weight
+        return 1.0 + w * coh
     
-    def __init__(self, eta: float = 0.2, tau: float = 5.0, gamma: float = 0.5):
-        self.eta = eta
-        self.tau = tau
-        self.gamma = gamma
-        self.history: list = []
+    # =========================================================================
+    # Entropy
+    # =========================================================================
     
-    def add_state(self, t: float, lambda_val: float, psi: np.ndarray):
-        self.history.append((t, lambda_val, psi.copy()))
-        if len(self.history) > 100:
-            self.history = self.history[-100:]
+    def compute_state_entropy(self, state: np.ndarray) -> float:
+        """
+        状態のエンタングルメントエントロピー（Schmidt分解）
+        
+        |ψ⟩ = Σ λᵢ |aᵢ⟩|bᵢ⟩
+        S = -Σ λᵢ² ln(λᵢ²)
+        
+        【物理的意味】
+          S 低い: 状態が「整列」→ 回復可能
+          S 高い: 状態が「乱れ」→ 損傷（不可逆）
+        """
+        if state is None:
+            return 0.0
+        
+        xp = self.xp
+        N = len(state)
+        n = int(np.sqrt(N))
+        
+        if n * n != N:
+            # 完全平方でなければ Shannon entropy
+            if self.use_gpu:
+                p = cp.abs(cp.asarray(state)) ** 2
+                p = cp.asnumpy(p)
+            else:
+                p = np.abs(state) ** 2
+            p = p / (p.sum() + 1e-10)
+            return float(-np.sum(p * np.log(p + 1e-10)))
+        
+        # Schmidt 分解（SVD）
+        if self.use_gpu:
+            mat = cp.reshape(cp.asarray(state), (n, n))
+            _, s, _ = cp.linalg.svd(mat)
+            s = cp.asnumpy(s)
+        else:
+            mat = np.reshape(state, (n, n))
+            _, s, _ = np.linalg.svd(mat)
+        
+        # 正規化
+        p = s ** 2
+        p = p / (p.sum() + 1e-10)
+        
+        # von Neumann entropy
+        S = -np.sum(p * np.log(p + 1e-10))
+        return float(S)
     
-    def compute_memory_contribution(self, t: float, psi: np.ndarray) -> float:
+    def compute_history_entropy(self) -> float:
+        """
+        履歴全体のエントロピー
+        
+        S = -Σ pᵢ ln(pᵢ)
+        pᵢ = |⟨ψᵢ|ψ_avg⟩|²
+        
+        【疲労との関係】
+          サイクル累積 → S 蓄積 → S > S_c で破壊
+        """
+        states = [e.state for e in self.history if e.state is not None]
+        if len(states) < 2:
+            return 0.0
+        
+        xp = self.xp
+        
+        # 平均状態
+        if self.use_gpu:
+            states_gpu = [cp.asarray(s) for s in states]
+            psi_avg = sum(states_gpu) / len(states_gpu)
+            psi_avg = psi_avg / (cp.linalg.norm(psi_avg) + 1e-10)
+        else:
+            psi_avg = sum(states) / len(states)
+            psi_avg = psi_avg / (np.linalg.norm(psi_avg) + 1e-10)
+        
+        # 各状態との重なり
+        overlaps = []
+        for state in states:
+            if self.use_gpu:
+                ov = float(abs(cp.vdot(psi_avg, cp.asarray(state))) ** 2)
+            else:
+                ov = float(abs(np.vdot(psi_avg, state)) ** 2)
+            overlaps.append(ov)
+        
+        # Shannon entropy
+        p = np.array(overlaps)
+        p = p / (p.sum() + 1e-10)
+        S = -np.sum(p * np.log(p + 1e-10))
+        
+        return float(S)
+    
+    def compute_entropy_weight(self, idx: int) -> float:
+        """
+        エントロピーに基づく重み
+        
+        S 低い → 重み大（秩序的 = 重要な記憶）
+        S 高い → 重み小（無秩序 = 薄れる記憶）
+        """
+        if idx >= len(self.history):
+            return 1.0
+        
+        entry = self.history[idx]
+        
+        # キャッシュされたエントロピーを使用
+        if entry.entropy is not None:
+            S = entry.entropy
+        elif entry.state is not None:
+            S = self.compute_state_entropy(entry.state)
+            entry.entropy = S  # キャッシュ
+        else:
+            return 1.0
+        
+        # S_max の推定
+        if entry.state is not None:
+            S_max = np.log(len(entry.state))
+        else:
+            S_max = 5.0  # デフォルト
+        
+        # exp(-S/S_ref) 形式
+        S_ref = S_max / 2
+        w = self.config.entropy_weight
+        
+        weight = 1.0 + w * np.exp(-S / S_ref)
+        return float(weight)
+    
+    # =========================================================================
+    # Total Importance
+    # =========================================================================
+    
+    def compute_importance(self, idx: int, current_state: np.ndarray = None) -> float:
+        """
+        総合的な重要度（アクティブウェイト）
+        
+        I = δ重み × 繰り返し × コヒーレンス × エントロピー
+        
+        【統一される物理】
+          - δ 大きい変位は重要（Lindemann）
+          - 繰り返しは累積（Coffin-Manson）
+          - 位相揃いは干渉を強める（量子効果）
+          - 低エントロピーは秩序（回復可能性）
+        """
+        w_delta = self.compute_delta_weight(idx)
+        w_rep = self.compute_repetition_weight(idx)
+        w_coh = self.compute_coherence_weight(idx, current_state)
+        w_ent = self.compute_entropy_weight(idx)
+        
+        return w_delta * w_rep * w_coh * w_ent
+    
+    # =========================================================================
+    # Main API
+    # =========================================================================
+    
+    def __call__(self, t: float, tau: float, velocity: float = 0.0) -> float:
+        """
+        カーネル評価
+        
+        K(t, τ, v) = K_base(t-τ) × D(v)
+        
+        注: アクティブウェイト I は compute_memory_contribution で適用
+        """
+        dt = t - tau
+        return self.kernel_base(dt) * self.direction_factor(velocity)
+    
+    def compute_memory_contribution(self,
+                                     t: float,
+                                     current_state: np.ndarray = None) -> float:
+        """
+        メモリ寄与を計算（DSE の核心）
+        
+        ΔE_mem = Σᵢ K(t, τᵢ, vᵢ) × I(τᵢ, ψ) × overlap(ψ, ψᵢ)
+        
+        Args:
+            t: 現在時刻
+            current_state: 現在の状態ベクトル
+            
+        Returns:
+            delta: メモリによるエネルギー補正
+        """
         if len(self.history) == 0:
             return 0.0
         
-        delta_lambda = 0.0
+        delta = 0.0
         
-        for t_hist, lambda_hist, psi_hist in self.history:
-            dt = t - t_hist
+        for idx, entry in enumerate(self.history):
+            dt = t - entry.time
             if dt <= 0:
                 continue
             
-            kernel = np.exp(-dt / self.tau) * (1 + self.gamma * dt)
-            overlap = abs(np.vdot(psi, psi_hist))**2
-            delta_lambda += self.eta * kernel * lambda_hist * overlap
+            # 基本カーネル × 方向依存
+            K = self(t, entry.time, entry.velocity)
+            
+            # アクティブウェイト
+            I = self.compute_importance(idx, current_state)
+            
+            # 状態重なり
+            if current_state is not None and entry.state is not None:
+                if self.use_gpu:
+                    cs = cp.asarray(current_state)
+                    es = cp.asarray(entry.state)
+                    overlap = float(abs(cp.vdot(cs, es)) ** 2)
+                else:
+                    overlap = float(abs(np.vdot(current_state, entry.state)) ** 2)
+            else:
+                overlap = 1.0
+            
+            delta += K * I * overlap
         
-        return delta_lambda
+        return delta
     
-    def clear(self):
-        self.history = []
+    def integrate(self, t: float, history_times: np.ndarray) -> np.ndarray:
+        """
+        任意の時刻配列に対するカーネル重みを計算（バッチ処理）
+        
+        外部の履歴を使う場合用
+        """
+        xp = self.xp
+        
+        if self.use_gpu:
+            times = cp.asarray(history_times)
+        else:
+            times = np.asarray(history_times)
+        
+        dt = t - times
+        
+        # 基本カーネル
+        gamma = self.config.gamma
+        tau0 = self.config.tau0
+        
+        valid = dt > 0
+        weights = xp.zeros_like(dt, dtype=float)
+        
+        if self.use_gpu:
+            weights[valid] = (dt[valid] + 0.1) ** (-gamma) * cp.exp(-dt[valid] / tau0)
+        else:
+            weights[valid] = (dt[valid] + 0.1) ** (-gamma) * np.exp(-dt[valid] / tau0)
+        
+        # 正規化
+        total = float(weights.sum())
+        if total > 0:
+            weights = weights / total
+        
+        if self.use_gpu:
+            return cp.asnumpy(weights)
+        return weights
+    
+    # =========================================================================
+    # Diagnostics
+    # =========================================================================
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """診断情報"""
+        stats = {
+            'history_length': len(self.history),
+            'config': {
+                'gamma': self.config.gamma,
+                'tau0': self.config.tau0,
+                'alpha_stretch': self.config.alpha_stretch,
+                'beta_compress': self.config.beta_compress,
+            },
+            'use_gpu': self.use_gpu,
+        }
+        
+        if len(self.history) > 0:
+            velocities = [e.velocity for e in self.history]
+            stats['velocity_mean'] = float(np.mean(velocities))
+            stats['velocity_std'] = float(np.std(velocities))
+            stats['n_stretch'] = sum(1 for v in velocities if v > 0)
+            stats['n_compress'] = sum(1 for v in velocities if v < 0)
+            
+            entropies = [e.entropy for e in self.history if e.entropy is not None]
+            if entropies:
+                stats['entropy_mean'] = float(np.mean(entropies))
+                stats['entropy_max'] = float(np.max(entropies))
+            
+            stats['collective_coherence'] = self.compute_collective_coherence()
+            stats['history_entropy'] = self.compute_history_entropy()
+        
+        return stats
+    
+    def __repr__(self) -> str:
+        return (f"MemoryKernel(γ={self.config.gamma:.2f}, τ₀={self.config.tau0:.1f}, "
+                f"GPU={self.use_gpu}, history={len(self.history)})")
 
 
 # =============================================================================
@@ -795,110 +1001,86 @@ class SimpleMemoryKernel:
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("Memory Kernel Test (v0.5.0 - 4 Components + RepulsiveMemory)")
+    print("Unified Memory Kernel Test")
     print("=" * 70)
     
-    # Create composite kernel with all 4 components
-    kernel = CompositeMemoryKernel(
-        weights=KernelWeights(field=0.3, phys=0.25, chem=0.25, exclusion=0.2),
-        gamma_field=1.216,
-        beta_phys=0.5,
-        tau0_phys=10.0,
-        t_react_chem=5.0,
-        tau_rep=3.0,
-        tau_recover=10.0
-    )
+    # 基本テスト
+    print("\n[1] Basic Kernel Test")
+    kernel = MemoryKernel(gamma_memory=1.2, tau0=10.0, use_gpu=False)
+    print(f"  {kernel}")
     
-    print(kernel)
-    print()
+    # 状態追加
+    np.random.seed(42)
+    dim = 16
     
-    # Test: weights at t=20
-    history_times = np.arange(0, 20, 1.0)
-    t_current = 20.0
+    for t in range(10):
+        state = np.random.randn(dim) + 1j * np.random.randn(dim)
+        state = state / np.linalg.norm(state)
+        r = 1.0 + 0.1 * np.sin(t)  # 振動
+        kernel.add_state(t=float(t), r=r, state=state)
     
-    decomp = kernel.decompose(t_current, history_times)
+    print(f"  History: {len(kernel.history)} entries")
     
-    print(f"t = {t_current}, history length = {len(history_times)}")
-    print()
-    print("Component contributions:")
-    for name, weights in decomp.items():
-        if name != 'total':
-            print(f"  {name}: max={weights.max():.4f} at tau={history_times[weights.argmax()]:.1f}")
+    # メモリ寄与
+    current = np.random.randn(dim) + 1j * np.random.randn(dim)
+    current = current / np.linalg.norm(current)
+    delta = kernel.compute_memory_contribution(t=10.0, current_state=current)
+    print(f"  Memory contribution: {delta:.6f}")
     
-    print()
-    print("Integrated weights (last 5 steps):")
-    for i in range(-5, 0):
-        print(f"  tau={history_times[i]:.1f}: weight={decomp['total'][i]:.4f}")
+    # 統計
+    stats = kernel.get_statistics()
+    print(f"  Collective coherence: {stats.get('collective_coherence', 0):.4f}")
+    print(f"  History entropy: {stats.get('history_entropy', 0):.4f}")
     
-    # Exclusion kernel specific test
-    print()
-    print("=" * 70)
-    print("Exclusion Kernel Test (Distance Direction)")
-    print("=" * 70)
+    # 方向依存テスト
+    print("\n[2] Direction Dependence Test")
+    print("  velocity    D(v)")
+    print("  " + "-" * 25)
+    for v in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+        D = kernel.direction_factor(v)
+        direction = "compress" if v < 0 else ("stretch" if v > 0 else "static")
+        print(f"  {v:+6.2f}    {D:.4f}  ({direction})")
     
-    excl = ExclusionKernel(tau_rep=3.0, tau_recover=10.0)
+    # γ_memory からの構築テスト
+    print("\n[3] from_gamma_memory Test")
+    for gamma in [0.5, 1.0, 1.5, 2.0]:
+        config = MemoryKernelConfig.from_gamma_memory(gamma)
+        print(f"  γ={gamma:.1f}: tau0={config.tau0:.2f}, "
+              f"α_stretch={config.alpha_stretch:.2f}, "
+              f"coh_w={config.coherence_weight:.2f}")
     
-    print("\nK(dt) for different time lags:")
-    print("  dt      K(dt)    Interpretation")
-    print("  " + "-" * 40)
-    for dt in [0.5, 1.0, 2.0, 5.0, 10.0, 20.0]:
-        K_val = excl(dt, 0)
-        if dt < 2:
-            interp = "Recent compression, strong effect"
-        elif dt < 10:
-            interp = "Partial recovery"
-        else:
-            interp = "Mostly recovered"
-        print(f"  {dt:5.1f}   {K_val:.4f}   {interp}")
+    # Vorticity からの構築テスト
+    print("\n[4] from_vorticity Test")
+    # ダミー値
+    V_total, V_local = 2.0, 1.5
+    E_xc = -0.5
+    kernel2 = MemoryKernel.from_vorticity(V_total, V_local, E_xc, use_gpu=False)
+    print(f"  V_total={V_total}, V_local={V_local}, E_xc={E_xc}")
+    print(f"  → {kernel2}")
     
-    # RepulsiveMemoryKernel test
-    print()
-    print("=" * 70)
-    print("RepulsiveMemoryKernel Test (Hysteresis)")
-    print("=" * 70)
+    # カーネル減衰テスト
+    print("\n[5] Kernel Decay Test")
+    print("  dt        K_base(dt)")
+    print("  " + "-" * 25)
+    for dt in [0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]:
+        K = kernel.kernel_base(dt)
+        print(f"  {dt:6.1f}    {K:.6f}")
     
-    rep_kernel = RepulsiveMemoryKernel(
-        eta_rep=0.3,
-        tau_rep=3.0,
-        tau_recover=10.0,
-        r_critical=0.8
-    )
+    # GPU テスト
+    print("\n[6] GPU Test")
+    if HAS_CUPY:
+        kernel_gpu = MemoryKernel(gamma_memory=1.0, use_gpu=True)
+        
+        for t in range(5):
+            state = np.random.randn(dim) + 1j * np.random.randn(dim)
+            state = state / np.linalg.norm(state)
+            kernel_gpu.add_state(t=float(t), r=1.0 + 0.1*t, state=state)
+        
+        delta_gpu = kernel_gpu.compute_memory_contribution(t=5.0, current_state=current)
+        print(f"  GPU kernel works! delta={delta_gpu:.6f}")
+    else:
+        print("  CuPy not available, skipping GPU test")
     
-    # Simulate compression
-    print("\nCompression phase (r: 1.2 → 0.6):")
-    t = 0.0
-    for r in np.linspace(1.2, 0.6, 5):
-        rep_kernel.add_state(t, r)
-        V_eff = rep_kernel.compute_effective_repulsion(r, t)
-        print(f"  t={t:.1f}, r={r:.2f}: V_eff={V_eff:.4f}")
-        t += 1.0
-    
-    # Simulate expansion
-    print("\nExpansion phase (r: 0.6 → 1.2):")
-    for r in np.linspace(0.6, 1.2, 5):
-        rep_kernel.add_state(t, r)
-        V_eff = rep_kernel.compute_effective_repulsion(r, t)
-        enhancement = rep_kernel.compute_repulsion_enhancement(t, r)
-        print(f"  t={t:.1f}, r={r:.2f}: V_eff={V_eff:.4f} (enhancement={enhancement:.4f})")
-        t += 1.0
-    
-    # GPU test
-    print()
-    print("=" * 70)
-    print("GPU Kernel Test")
-    print("=" * 70)
-    
-    try:
-        kernel_gpu = CompositeMemoryKernelGPU()
-        history_gpu = cp.arange(0, 20, 1.0)
-        weights_gpu = kernel_gpu.integrate_gpu(20.0, history_gpu)
-        print(f"GPU weights shape: {weights_gpu.shape}")
-        print(f"GPU weights sum: {float(weights_gpu.sum()):.6f}")
-        print("GPU kernel works!")
-    except Exception as e:
-        print(f"GPU test skipped: {e}")
-    
-    print()
-    print("=" * 70)
-    print("Memory Kernel Test Complete!")
+    print("\n" + "=" * 70)
+    print("✅ Unified Memory Kernel Test Complete!")
     print("=" * 70)
