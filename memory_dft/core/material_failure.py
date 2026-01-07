@@ -54,6 +54,30 @@ except ImportError:
 import scipy.sparse as sp
 from scipy.sparse.linalg import eigsh as sp_eigsh
 
+# Environment operators (ThermalEnsemble, etc.)
+try:
+    from .environment_operators import (
+        ThermalEnsemble,
+        ThermalObservable,
+        boltzmann_weights,
+        T_to_beta,
+        K_B_EV,
+        compute_winding_number,
+        compute_phase_entropy,
+    )
+    HAS_ENV_OPS = True
+except ImportError:
+    HAS_ENV_OPS = False
+    # Fallback constants
+    K_B_EV = 8.617333262e-5  # eV/K
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+k_B = K_B_EV  # Alias for compatibility
+
 
 # =============================================================================
 # Data Classes
@@ -160,6 +184,34 @@ def eigsh_wrapper(H, k: int = 1, which: str = 'SA', use_gpu: bool = True):
         H = sp.csr_matrix(H)
     return sp_eigsh(H, k=k, which=which)
 
+
+# =============================================================================
+# Thermal Ensemble Helpers (for compatibility with environment_operators.py)
+# =============================================================================
+
+def _get_weights(eigenvalues: np.ndarray, T: float) -> np.ndarray:
+    """Get Boltzmann weights at temperature T."""
+    if HAS_ENV_OPS:
+        return boltzmann_weights(eigenvalues, T_to_beta(T))
+    else:
+        # Fallback implementation
+        if T <= 0:
+            weights = np.zeros(len(eigenvalues))
+            weights[0] = 1.0
+            return weights
+        beta = 1.0 / (k_B * T)
+        E_shifted = eigenvalues - eigenvalues[0]
+        weights = np.exp(-beta * E_shifted)
+        return weights / weights.sum()
+
+
+def _thermal_avg_value(result) -> float:
+    """Extract float value from thermal average result."""
+    if hasattr(result, 'value'):
+        return result.value
+    return float(result)
+
+
 # =============================================================================
 # Thermal Topology Analyzer
 # =============================================================================
@@ -176,10 +228,10 @@ class ThermalTopologyAnalyzer:
       位相的: Coherence → C_c で融解
     """
     
-    def __init__(self, ensemble: ThermalEnsemble, use_gpu: bool = True):
+    def __init__(self, ensemble, use_gpu: bool = True):
         """
         Args:
-            ensemble: ThermalEnsemble with pre-computed eigenstates
+            ensemble: ThermalEnsemble or LocalThermalEnsemble with pre-computed eigenstates
             use_gpu: Use GPU acceleration
         """
         self.ensemble = ensemble
@@ -224,7 +276,7 @@ class ThermalTopologyAnalyzer:
         High coherence: phases aligned → solid
         Low coherence: phases random → liquid
         """
-        weights = self.ensemble.compute_weights(T)
+        weights = _get_weights(self.ensemble.eigenvalues, T)
         
         # Phase factor from each eigenstate
         phase_sum = 0.0 + 0.0j
@@ -247,7 +299,7 @@ class ThermalTopologyAnalyzer:
             a: Lattice constant (for normalization)
         """
         # Phase variance ∝ displacement variance
-        phase_var = self.ensemble.thermal_average('phase_variance', T)
+        phase_var = _thermal_avg_value(self.ensemble.thermal_average('phase_variance', T))
         
         # δ ≈ sqrt(phase_var) / π (normalized)
         delta = np.sqrt(phase_var) / np.pi
@@ -272,7 +324,7 @@ class ThermalTopologyAnalyzer:
         """
         coherence = self.compute_coherence(T)
         Z_eff = self.compute_effective_Z(T)
-        phase_entropy = self.ensemble.thermal_average('phase_entropy', T)
+        phase_entropy = _thermal_avg_value(self.ensemble.thermal_average('phase_entropy', T))
         delta = self.compute_lindemann_parameter(T)
         is_melted = delta > lindemann_critical
         
@@ -284,7 +336,7 @@ class ThermalTopologyAnalyzer:
             lindemann_delta=delta,
             is_melted=is_melted,
             eigenvalues=self.ensemble.eigenvalues,
-            weights=self.ensemble.compute_weights(T)
+            weights=_get_weights(self.ensemble.eigenvalues, T)
         )
     
     def temperature_scan(self, T_range: np.ndarray,
@@ -686,6 +738,57 @@ class CombinedFailureAnalyzer:
 
 
 # =============================================================================
+# Local Thermal Ensemble (for standalone testing)
+# =============================================================================
+
+class LocalThermalEnsemble:
+    """
+    軽量版 ThermalEnsemble（テスト用）
+    
+    environment_operators.py の ThermalEnsemble とは独立。
+    DSETopologyTest で使用。
+    """
+    
+    def __init__(self, H, n_eigenstates: int = 20, use_gpu: bool = False):
+        self.use_gpu = use_gpu and HAS_CUPY
+        self.xp = get_xp(self.use_gpu)
+        
+        self.H = H
+        self.n_eigenstates = min(n_eigenstates, H.shape[0] - 2)
+        
+        # Compute eigenstates
+        self.eigenvalues, self.eigenvectors = eigsh_wrapper(
+            H, k=self.n_eigenstates, which='SA', use_gpu=self.use_gpu
+        )
+        
+        # Sort by energy
+        idx = np.argsort(self.eigenvalues)
+        self.eigenvalues = self.eigenvalues[idx]
+        self.eigenvectors = self.eigenvectors[:, idx]
+        
+        # Observable cache
+        self._obs_cache: Dict[str, np.ndarray] = {}
+    
+    def register_observable(self, name: str, func: Callable):
+        """Register observable function."""
+        values = np.zeros(self.n_eigenstates)
+        for n in range(self.n_eigenstates):
+            psi = self.eigenvectors[:, n]
+            values[n] = func(psi)
+        self._obs_cache[name] = values
+    
+    def thermal_average(self, observable: str, T: float) -> float:
+        """Compute thermal average (returns float directly)."""
+        if observable not in self._obs_cache:
+            raise ValueError(f"Observable '{observable}' not registered")
+        
+        weights = _get_weights(self.eigenvalues, T)
+        O_values = self._obs_cache[observable]
+        
+        return float(np.sum(weights * O_values))
+
+
+# =============================================================================
 # DSE Topology Test Suite
 # =============================================================================
 
@@ -776,8 +879,8 @@ class DSETopologyTest:
         # Convert to host for eigensolver
         H_host = to_host(self.H)
         
-        # Create thermal ensemble
-        self.ensemble = ThermalEnsemble(H_host, n_eigenstates, use_gpu=False)
+        # Create thermal ensemble (using local version for standalone testing)
+        self.ensemble = LocalThermalEnsemble(H_host, n_eigenstates, use_gpu=False)
         
         # Create analyzers
         self.thermal_analyzer = ThermalTopologyAnalyzer(self.ensemble, self.use_gpu)
