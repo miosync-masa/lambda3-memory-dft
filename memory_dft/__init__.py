@@ -41,10 +41,8 @@ Structure (Refactored):
   │   └── commands/             # Individual command modules
   ├── core/
   │   ├── memory_kernel.py      # 4-layer kernel (field/phys/chem/exclusion)
-  │   ├── repulsive_kernel.py   # Compression memory
   │   ├── history_manager.py    # History tracking
-  │   ├── sparse_engine_unified.py  # Unified sparse engine (v0.5.0)
-  │   └── lattice.py            # Lattice geometry
+  │   └── sparse_engine_unified.py  # Unified sparse engine (v0.5.0)
   ├── solvers/
   │   ├── lanczos_memory.py     # Lanczos + memory
   │   ├── time_evolution.py     # Time evolution
@@ -53,14 +51,15 @@ Structure (Refactored):
   ├── engineering/              
   │   ├── base.py               # Common Base
   │   └──thermo_mechanical.py   # ThermoMechanical
-  ├── holographic/  
+  ├── holographic/ 
+  │   ├── measurement.py        # measurement
   │   └── dual.py               # AdS/CFT Engine
   ├── physics/
   │   ├── lambda3_bridge.py     # Stability diagnostics
   │   ├── vorticity.py          # γ decomposition
   │   ├── thermodynamics.py     # Thermal utilities
   │   ├── rdm.py                # 2-RDM analysis
-  │   ├──  dislocation_dynamics.py # Dislocation Dynamics
+  │   ├── dislocation_dynamics.py # Dislocation Dynamics
   │   └── topology.py           # Topology Engine 
   ├── interfaces/               # External package interfaces
   │   └── pyscf_interface.py    # PySCF DFT vs DSE comparison
