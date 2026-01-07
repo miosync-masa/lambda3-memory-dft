@@ -15,7 +15,6 @@ Features:
   - GPU acceleration when available
   - All spin models: Heisenberg, Ising, XY, Kitaev, Hubbard
   - λ = K/|V| stability parameter
-  - 2-RDM computation (delegates to physics/rdm.py)
 
 Usage:
     engine = SparseEngine(n_sites=6, use_gpu=True)
@@ -256,11 +255,6 @@ class LatticeGeometry2D:
         return (f"LatticeGeometry2D({self.Lx}×{self.Ly}, BC={bc_x}{bc_y}, "
                 f"N={self.N_spins}, bonds={len(self.bonds_nn)})")
 
-
-# Alias for backward compatibility
-LatticeGeometry = LatticeGeometry2D
-
-
 # =============================================================================
 # Factory Functions for Geometry
 # =============================================================================
@@ -319,13 +313,7 @@ class ComputeResult:
     energy: float
     psi: np.ndarray
     lambda_val: float
-    rdm2: Optional[np.ndarray] = None
     observables: Optional[Dict[str, float]] = None
-
-
-# Backward compatibility alias
-HubbardResult = ComputeResult
-
 
 # =============================================================================
 # Sparse Engine (Unified)
@@ -1275,71 +1263,15 @@ class SparseEngine:
         
         return abs(K) / (abs(V) + epsilon)
     
-    # Alias for backward compatibility
-    compute_stability_parameter = compute_lambda
-    
-    # =========================================================================
-    # 2-RDM (Delegates to physics/rdm.py)
-    # =========================================================================
-    
-    def compute_2rdm(self, psi, method: str = 'diagonal') -> np.ndarray:
-        """
-        Compute two-particle reduced density matrix.
-        
-        Delegates to physics/rdm.py for the actual computation.
-        The 2-RDM encodes all two-body correlations.
-        
-        Args:
-            psi: Wavefunction
-            method: 'diagonal' (fast) or 'full'
-            
-        Returns:
-            rdm2: Array of shape (n_sites, n_sites, n_sites, n_sites)
-        """
-        from memory_dft.physics.rdm import compute_2rdm
-        
-        number_ops = self._get_number_operators()
-        
-        # Convert to numpy if on GPU
-        if self.use_gpu:
-            psi_np = psi.get() if hasattr(psi, 'get') else psi
-            number_ops_np = [op.get() if hasattr(op, 'get') else op 
-                             for op in number_ops]
-        else:
-            psi_np = psi
-            number_ops_np = number_ops
-        
-        return compute_2rdm(psi_np, self.n_sites, 
-                           number_ops=number_ops_np, method=method)
-    
     # =========================================================================
     # Convenience Methods
     # =========================================================================
     
     def compute_full(self, H_K, H_V, 
-                     compute_rdm2: bool = False,
                      compute_observables: bool = True) -> ComputeResult:
-        """
-        Perform complete calculation: H -> ground state -> stability.
-        
-        This is the main entry point for single-shot calculations.
-        
-        Args:
-            H_K: Kinetic Hamiltonian
-            H_V: Potential Hamiltonian
-            compute_rdm2: Compute 2-RDM (expensive)
-            compute_observables: Compute magnetization, etc.
-            
-        Returns:
-            ComputeResult containing energy, wavefunction, λ, etc.
-        """
         H = H_K + H_V
         E, psi = self.compute_ground_state(H)
         lambda_val = self.compute_lambda(psi, H_K, H_V)
-        
-        rdm2 = None
-        if compute_rdm2:
-            rdm2 = self.compute_2rdm(psi)
         
         observables = None
         if compute_observables:
@@ -1355,7 +1287,6 @@ class SparseEngine:
             energy=E,
             psi=psi,
             lambda_val=lambda_val,
-            rdm2=rdm2,
             observables=observables
         )
     
@@ -1372,105 +1303,6 @@ class SparseEngine:
     def __repr__(self) -> str:
         backend = "GPU" if self.use_gpu else "CPU"
         return f"SparseEngine(N={self.n_sites}, Dim={self.dim:,}, backend={backend})"
-
-
-# =============================================================================
-# Backward Compatibility Aliases
-# =============================================================================
-
-# Original name
-SparseHamiltonianEngine = SparseEngine
-
-# For imports expecting SpinOperators-like interface
-class SpinOperatorsCompat:
-    """Compatibility wrapper for SpinOperators interface."""
-    
-    def __init__(self, N_spins: int, use_gpu: bool = True):
-        self._engine = SparseEngine(N_spins, use_gpu=use_gpu, verbose=False)
-        self.N = N_spins
-        self.Dim = self._engine.dim
-        self.Sx = self._engine.Sx
-        self.Sy = self._engine.Sy
-        self.Sz = self._engine.Sz
-        self.Sp = self._engine.Sp
-        self.Sm = self._engine.Sm
-        self.S_total_x = self._engine.S_total_x
-        self.S_total_y = self._engine.S_total_y
-        self.S_total_z = self._engine.S_total_z
-
-
-class HubbardEngineCompat:
-    """
-    Backward compatibility wrapper for HubbardEngine API.
-    
-    Original API:
-        engine = HubbardEngine(L)
-        result = engine.compute_full(t=1.0, U=2.0, h=0.0, 
-                                     bond_lengths=..., site_potentials=...)
-    
-    Now wraps SparseEngine internally.
-    """
-    
-    def __init__(self, n_sites: int, use_gpu: bool = True, verbose: bool = True):
-        self.n_sites = n_sites
-        self.dim = 2 ** n_sites
-        self._engine = SparseEngine(n_sites, use_gpu=use_gpu, verbose=verbose)
-        self._geometry = self._engine.build_chain(periodic=False)
-    
-    def compute_full(self, t: float = 1.0, U: float = 2.0, h: float = 0.0,
-                     site_potentials: Optional[List[float]] = None,
-                     bond_lengths: Optional[List[float]] = None,
-                     compute_rdm2: bool = False) -> ComputeResult:
-        """
-        Compute ground state and stability parameter.
-        
-        Args:
-            t: Hopping parameter
-            U: On-site interaction
-            h: Magnetic field
-            site_potentials: Site-dependent potentials
-            bond_lengths: Bond-length dependent hopping
-            compute_rdm2: Compute 2-RDM
-            
-        Returns:
-            ComputeResult with energy, psi, lambda_val, etc.
-        """
-        bonds = self._geometry.bonds
-        
-        H_K, H_V = self._engine.build_hubbard(
-            bonds, t=t, U=U, h=h,
-            site_potentials=site_potentials,
-            bond_lengths=bond_lengths
-        )
-        
-        return self._engine.compute_full(H_K, H_V, compute_rdm2=compute_rdm2)
-    
-    def compute_ground_state(self, t: float = 1.0, U: float = 2.0, h: float = 0.0):
-        """Compute ground state only."""
-        result = self.compute_full(t=t, U=U, h=h)
-        return result.energy, result.psi
-    
-    @property
-    def H(self):
-        """Current Hamiltonian (for compatibility)."""
-        H_K, H_V = self._engine.build_hubbard(self._geometry.bonds)
-        return H_K + H_V
-    
-    @property
-    def H_K(self):
-        """Kinetic Hamiltonian."""
-        H_K, _ = self._engine.build_hubbard(self._geometry.bonds)
-        return H_K
-    
-    @property
-    def H_V(self):
-        """Potential Hamiltonian."""
-        _, H_V = self._engine.build_hubbard(self._geometry.bonds)
-        return H_V
-
-
-# Alias for backward compatibility
-HubbardEngine = HubbardEngineCompat
 
 
 # =============================================================================
