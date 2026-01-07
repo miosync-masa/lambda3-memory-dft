@@ -332,7 +332,6 @@ class SparseEngine:
       - Geometry construction (chain, ladder, square)
       - Ground state computation
       - λ = K/|V| stability analysis
-      - 2-RDM computation
     
     Example:
         >>> engine = SparseEngine(n_sites=4)
@@ -992,8 +991,8 @@ class SparseEngine:
             t_weak = 0.3 * t
         
         bonds = geometry.bonds
-        vacancies = getattr(geometry, 'vacancies', [])
-        weak_bonds_list = getattr(geometry, 'weak_bonds', [])
+        vacancies = getattr(geometry, 'vacancies', []) or []
+        weak_bonds_list = getattr(geometry, 'weak_bonds', []) or []
         positions = geometry.positions
         
         # =====================================================
