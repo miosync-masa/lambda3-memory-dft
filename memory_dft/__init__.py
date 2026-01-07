@@ -73,7 +73,7 @@ __version__ = "1.0.0"
 # =============================================================================
 # Core Components
 # =============================================================================
-from .sparse_engine_unified import (
+from .core.sparse_engine_unified import (
     # Main engine
     SparseEngine,
     
@@ -91,13 +91,13 @@ from .sparse_engine_unified import (
     ComputeResult,
 )
 
-from .memory_kernel import (
+from .core.memory_kernel import (
     MemoryKernel,
     MemoryKernelConfig,
     HistoryEntry,
 )
 
-from .environment_operators import (
+from .core.environment_operators import (
     EnvironmentBuilder,
     EnvironmentOperator,
     TemperatureOperator,
