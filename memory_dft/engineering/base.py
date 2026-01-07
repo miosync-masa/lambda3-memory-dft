@@ -474,8 +474,17 @@ class EngineeringSolver(ABC):
         
         psi_host = self._to_host(psi)
         
+        # Convert H_K, H_V to host if GPU
+        H_K_host = self.H_K
+        H_V_host = self.H_V
+        if self.use_gpu:
+            if hasattr(self.H_K, 'get'):
+                H_K_host = self.H_K.get()
+            if hasattr(self.H_V, 'get'):
+                H_V_host = self.H_V.get()
+        
         return self.engine.compute_local_lambda(
-            psi_host, self.H_K, self.H_V, self.geometry
+            psi_host, H_K_host, H_V_host, self.geometry
         )
     
     def check_failure(self, T: float = 300.0) -> Tuple[bool, Optional[int]]:
