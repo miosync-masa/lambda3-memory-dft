@@ -15,19 +15,23 @@ Thermal Holographic Evolution Module
   エントロピー = 結び目が散らばる
   
   → 全部 topology で統一！
+  → トポロジー = 意味の保存則
 
 【温度変化速度の効果】
-  急冷（Quench）: dt小 → Memory効果強 → 非平衡凍結
-  徐冷（Anneal）: dt大 → Memory効果弱 → 平衡接近
+  急冷（Quench）: dt小 → Memory効果強 → 非平衡凍結 → 残留応力
+  徐冷（Anneal）: dt大 → Memory効果弱 → 平衡接近 → 応力解放
 
-【アーキテクチャ】
-  ThermalEnsemble (温度→分布)
-      ↓
-  DSESolver (Memory付き時間発展)
-      ↓
-  HolographicMeasurement (PRE/POST λ, 双対性)
-      ↓
-  ThermalTopologyAnalyzer (Coherence, Lindemann, 破壊予測)
+【第5の力との接続】
+  τ₀ ≈ 10⁻¹³ s = Debye振動周期
+  λ = c × τ₀ = 30 μm = 結晶粒サイズ = 第5の力の到達距離
+  
+  材料の残留応力 = 第5の力の閉じ込め
+  中性子星の異常冷却 = 第5の力の漏れ出し
+
+【スケール階層】
+  音速 × τ₀ = 0.5 nm  ← 原子の世界（フォノン）
+  光速 × τ₀ = 30 μm   ← 結晶粒の世界（第5の力）
+  比率 c/v_s ≈ 60,000
 
 Author: Tamaki & Masamichi Iizumi
 Date: 2025-01
@@ -40,10 +44,59 @@ from enum import Enum
 import warnings
 
 # =============================================================================
-# Constants
+# Imports from existing modules
 # =============================================================================
 
-K_B_EV = 8.617333262e-5  # eV/K
+# Core environment operators
+from memory_dft.core.environment_operators import (
+    ThermalEnsemble,
+    ThermalObservable,
+    boltzmann_weights,
+    T_to_beta,
+    K_B_EV,
+)
+
+# Memory kernel
+from memory_dft.core.memory_kernel import MemoryKernel
+
+# DSE Solver
+from memory_dft.solvers.dse_solver import DSESolver
+
+# Holographic measurement
+from memory_dft.holographic.measurement import (
+    HolographicMeasurement,
+    MeasurementRecord,
+    HolographicMeasurementResult,
+)
+
+# Material failure / Topology analysis
+from memory_dft.core.material_failure import (
+    ThermalTopologyAnalyzer,
+    StressTopologyAnalyzer,
+    CombinedFailureAnalyzer,
+    TopologyResult,
+    ThermalTopologyResult,
+    StressTopologyResult,
+    FailurePrediction as MaterialFailurePrediction,
+)
+
+# =============================================================================
+# Physical Constants
+# =============================================================================
+
+# Debye振動周期 - 原子の「息づかい」
+TAU_0 = 1e-13  # s
+
+# 光速・音速
+C_LIGHT = 3e8      # m/s
+V_SOUND = 5000     # m/s (金属の典型値)
+
+# 特性長さ
+LAMBDA_LIGHT = C_LIGHT * TAU_0    # 30 μm = 結晶粒サイズ = 第5の力到達距離
+LAMBDA_PHONON = V_SOUND * TAU_0   # 0.5 nm = フォノン波長 ≈ 格子定数
+
+# スケール比
+SCALE_RATIO = C_LIGHT / V_SOUND   # ≈ 60,000
 
 
 # =============================================================================
@@ -116,31 +169,25 @@ class ThermalPath:
     def generate(self) -> Tuple[np.ndarray, np.ndarray]:
         """温度列と dt 列を生成"""
         if self.mode == CoolingMode.QUENCH:
-            # 急冷: 温度が急激に下がる、dt は小さい
             T_values = np.linspace(self.T_start, self.T_end, self.n_steps)
-            dt_values = np.full(self.n_steps, 0.01)  # 小さいdt
+            dt_values = np.full(self.n_steps, 0.01)  # 小さいdt → Memory強
             
         elif self.mode == CoolingMode.ANNEAL:
-            # 徐冷: 温度がゆっくり下がる、dt は大きい
             T_values = np.linspace(self.T_start, self.T_end, self.n_steps)
-            dt_values = np.full(self.n_steps, 0.5)   # 大きいdt
+            dt_values = np.full(self.n_steps, 0.5)   # 大きいdt → Memory弱
             
         elif self.mode == CoolingMode.LINEAR:
-            # 線形: 均等
             T_values = np.linspace(self.T_start, self.T_end, self.n_steps)
             dt_values = np.full(self.n_steps, 0.1)
             
         elif self.mode == CoolingMode.EXPONENTIAL:
-            # 指数的冷却
-            tau = self.n_steps / 3  # 特性時間
+            tau = self.n_steps / 3
             t = np.arange(self.n_steps)
             T_values = self.T_end + (self.T_start - self.T_end) * np.exp(-t / tau)
-            # dt は温度変化率に反比例
             dT = np.abs(np.gradient(T_values))
             dt_values = 0.1 / (dT / dT.mean() + 0.1)
             
         else:
-            # カスタム: 線形フォールバック
             T_values = np.linspace(self.T_start, self.T_end, self.n_steps)
             dt_values = np.full(self.n_steps, 0.1)
         
@@ -150,11 +197,11 @@ class ThermalPath:
 @dataclass
 class DualityMetrics:
     """双対性メトリクス"""
-    TE_bulk_to_boundary: float    # Transfer Entropy: Bulk → Boundary
-    TE_boundary_to_bulk: float    # Transfer Entropy: Boundary → Bulk
-    duality_index: float          # |TE_B→b - TE_b→B| / (TE_B→b + TE_b→B)
-    best_lag: int                 # 最適ラグ
-    max_correlation: float        # 最大相関
+    TE_bulk_to_boundary: float
+    TE_boundary_to_bulk: float
+    duality_index: float
+    best_lag: int
+    max_correlation: float
     
     def is_strong_duality(self) -> bool:
         return self.duality_index < 0.2
@@ -170,9 +217,9 @@ class FailurePrediction:
     failure_step: Optional[int]
     failure_temperature: Optional[float]
     failure_site: Optional[int]
-    failure_mechanism: str        # 'thermal', 'mechanical', 'combined'
+    failure_mechanism: str
     lambda_at_failure: float
-    confidence: float             # 予測信頼度
+    confidence: float
 
 
 @dataclass
@@ -181,16 +228,16 @@ class ThermalHolographicResult:
     records: List[ThermalHolographicRecord]
     thermal_path: ThermalPath
     
-    # Summary statistics
     T_range: Tuple[float, float] = (0.0, 0.0)
     lambda_range: Tuple[float, float] = (0.0, 0.0)
     coherence_range: Tuple[float, float] = (0.0, 0.0)
     
-    # Duality
     duality: Optional[DualityMetrics] = None
-    
-    # Failure prediction
     failure: Optional[FailurePrediction] = None
+    
+    # 追加: Topology analysis results
+    thermal_topology: Optional[ThermalTopologyResult] = None
+    stress_topology: Optional[StressTopologyResult] = None
     
     def compute_summary(self):
         """サマリー統計を計算"""
@@ -207,339 +254,6 @@ class ThermalHolographicResult:
 
 
 # =============================================================================
-# Lightweight Thermal Ensemble (standalone)
-# =============================================================================
-
-class LightweightThermalEnsemble:
-    """
-    軽量版 ThermalEnsemble
-    
-    外部依存なしで動作。
-    本番では environment_operators.ThermalEnsemble を使用。
-    """
-    
-    def __init__(self, H: np.ndarray, n_eigenstates: int = 20):
-        """
-        Args:
-            H: ハミルトニアン
-            n_eigenstates: 固有状態数
-        """
-        from scipy.sparse.linalg import eigsh
-        from scipy.sparse import issparse, csr_matrix
-        
-        self.H = H
-        self.n_eigenstates = min(n_eigenstates, H.shape[0] - 2)
-        
-        # 固有値・固有ベクトル計算
-        if not issparse(H):
-            H_sparse = csr_matrix(H)
-        else:
-            H_sparse = H
-            
-        self.eigenvalues, self.eigenvectors = eigsh(
-            H_sparse, k=self.n_eigenstates, which='SA'
-        )
-        
-        # ソート
-        idx = np.argsort(self.eigenvalues)
-        self.eigenvalues = self.eigenvalues[idx]
-        self.eigenvectors = self.eigenvectors[:, idx]
-        
-        # Observable キャッシュ
-        self._obs_cache: Dict[str, np.ndarray] = {}
-        self._register_default_observables()
-    
-    def _register_default_observables(self):
-        """デフォルトの observable を登録"""
-        # Phase entropy
-        def phase_entropy(psi):
-            theta = np.angle(psi)
-            hist, _ = np.histogram(theta, bins=20, range=(-np.pi, np.pi))
-            p = hist / (hist.sum() + 1e-10)
-            return -np.sum(p[p > 0] * np.log(p[p > 0]))
-        
-        # Phase variance (Lindemann proxy)
-        def phase_variance(psi):
-            return np.var(np.angle(psi))
-        
-        # Winding number
-        def winding(psi):
-            theta = np.angle(psi)
-            dtheta = np.diff(theta)
-            dtheta = ((dtheta + np.pi) % (2 * np.pi)) - np.pi
-            return np.sum(dtheta) / (2 * np.pi)
-        
-        self.register_observable('phase_entropy', phase_entropy)
-        self.register_observable('phase_variance', phase_variance)
-        self.register_observable('winding', winding)
-    
-    def register_observable(self, name: str, func: Callable):
-        """Observable を登録"""
-        values = np.zeros(self.n_eigenstates)
-        for n in range(self.n_eigenstates):
-            psi = self.eigenvectors[:, n]
-            values[n] = func(psi)
-        self._obs_cache[name] = values
-    
-    def get_weights(self, T: float) -> np.ndarray:
-        """Boltzmann 重みを取得"""
-        if T <= 0:
-            weights = np.zeros(self.n_eigenstates)
-            weights[0] = 1.0
-            return weights
-        
-        beta = 1.0 / (K_B_EV * T)
-        E_shifted = self.eigenvalues - self.eigenvalues[0]
-        weights = np.exp(-beta * E_shifted)
-        return weights / weights.sum()
-    
-    def thermal_average(self, observable: str, T: float) -> float:
-        """熱平均を計算"""
-        if observable not in self._obs_cache:
-            raise ValueError(f"Observable '{observable}' not registered")
-        
-        weights = self.get_weights(T)
-        return float(np.sum(weights * self._obs_cache[observable]))
-    
-    def get_thermal_state(self, T: float) -> np.ndarray:
-        """温度 T での熱的状態（混合状態の代表）"""
-        weights = self.get_weights(T)
-        # 重み付き重ね合わせ（簡易版）
-        psi = np.zeros(self.eigenvectors.shape[0], dtype=complex)
-        for n in range(self.n_eigenstates):
-            psi += np.sqrt(weights[n]) * self.eigenvectors[:, n]
-        return psi / np.linalg.norm(psi)
-    
-    def compute_coherence(self, T: float) -> float:
-        """位相コヒーレンスを計算"""
-        weights = self.get_weights(T)
-        phase_sum = 0.0 + 0.0j
-        for n in range(self.n_eigenstates):
-            psi = self.eigenvectors[:, n]
-            avg_phase = np.angle(np.sum(psi))
-            phase_sum += weights[n] * np.exp(1j * avg_phase)
-        return float(abs(phase_sum))
-    
-    def compute_lindemann(self, T: float) -> float:
-        """Lindemann パラメータを計算"""
-        phase_var = self.thermal_average('phase_variance', T)
-        return float(np.sqrt(phase_var) / np.pi)
-
-
-# =============================================================================
-# Lightweight DSE Solver (standalone)
-# =============================================================================
-
-class LightweightDSESolver:
-    """
-    軽量版 DSE Solver
-    
-    Memory 効果付き時間発展。
-    本番では solvers/dse_solver.py を使用。
-    """
-    
-    def __init__(self, H_K: np.ndarray, H_V: np.ndarray, 
-                 gamma_memory: float = 0.1,
-                 eta_memory: float = 0.1):
-        """
-        Args:
-            H_K: 運動エネルギー項
-            H_V: ポテンシャル項
-            gamma_memory: Memory カーネル減衰率
-            eta_memory: Memory 混合率
-        """
-        self.H_K = np.asarray(H_K)
-        self.H_V = np.asarray(H_V)
-        self.H = self.H_K + self.H_V
-        self.gamma_memory = gamma_memory
-        self.eta_memory = eta_memory
-        
-        # History
-        self.history: List[Dict] = []
-        self.time = 0.0
-    
-    def reset(self):
-        """履歴をリセット"""
-        self.history = []
-        self.time = 0.0
-    
-    def compute_lambda(self, psi: np.ndarray) -> float:
-        """λ = K/|V| を計算"""
-        K = np.real(np.vdot(psi, self.H_K @ psi))
-        V = np.real(np.vdot(psi, self.H_V @ psi))
-        return abs(K) / (abs(V) + 1e-10)
-    
-    def compute_memory_contribution(self, psi: np.ndarray, dt: float) -> np.ndarray:
-        """Memory 項の寄与を計算"""
-        if len(self.history) < 2:
-            return np.zeros_like(psi)
-        
-        memory_psi = np.zeros_like(psi, dtype=complex)
-        
-        for i, entry in enumerate(self.history):
-            tau = self.time - entry['time']
-            if tau > 0:
-                # Memory kernel: K(τ) = (dt + ε)^(-γ) × exp(-τ/τ₀)
-                # dt が小さい（急冷）→ K 大 → Memory 強
-                # dt が大きい（徐冷）→ K 小 → Memory 弱
-                K_base = (dt + 0.01) ** (-self.gamma_memory)
-                K_decay = np.exp(-tau / 10.0)  # τ₀ = 10
-                K_total = K_base * K_decay
-                
-                memory_psi += K_total * entry['psi']
-        
-        norm = np.linalg.norm(memory_psi)
-        if norm > 1e-10:
-            memory_psi /= norm
-        
-        return memory_psi
-    
-    def step(self, psi: np.ndarray, dt: float) -> Tuple[np.ndarray, Dict]:
-        """1ステップ発展"""
-        # Memory 寄与
-        memory_psi = self.compute_memory_contribution(psi, dt)
-        memory_strength = np.linalg.norm(memory_psi)
-        
-        # Schrödinger 発展
-        # exp(-iHdt) ≈ 1 - iHdt (1次近似)
-        psi_evolved = psi - 1j * dt * (self.H @ psi)
-        
-        # Memory 混合
-        if memory_strength > 1e-10:
-            psi_new = (1 - self.eta_memory) * psi_evolved + self.eta_memory * memory_psi
-        else:
-            psi_new = psi_evolved
-        
-        # 正規化
-        psi_new = psi_new / np.linalg.norm(psi_new)
-        
-        # エネルギー計算
-        E = np.real(np.vdot(psi_new, self.H @ psi_new))
-        K = np.real(np.vdot(psi_new, self.H_K @ psi_new))
-        V = np.real(np.vdot(psi_new, self.H_V @ psi_new))
-        
-        # 履歴に追加
-        self.history.append({
-            'time': self.time,
-            'psi': psi.copy(),
-            'energy': E,
-            'lambda': self.compute_lambda(psi_new)
-        })
-        
-        self.time += dt
-        
-        info = {
-            'energy': E,
-            'kinetic': K,
-            'potential': V,
-            'lambda': self.compute_lambda(psi_new),
-            'memory_contribution': memory_strength,
-            'gamma_memory': self.gamma_memory
-        }
-        
-        return psi_new, info
-
-
-# =============================================================================
-# Lightweight Holographic Measurement (standalone)
-# =============================================================================
-
-class LightweightHolographicMeasurement:
-    """
-    軽量版 Holographic Measurement
-    
-    PRE/POST λ測定と双対性検証。
-    本番では holographic/measurement.py を使用。
-    """
-    
-    def __init__(self, gate_delay: int = 1):
-        self.gate_delay = gate_delay
-        self.phi_history: List[float] = []
-        self.lambda_history: List[float] = []
-        self.S_RT_history: List[float] = []
-        
-    def reset(self):
-        """履歴をリセット"""
-        self.phi_history = []
-        self.lambda_history = []
-        self.S_RT_history = []
-    
-    def measure(self, lambda_value: float, dt: float) -> Dict:
-        """1ステップの測定"""
-        # PRE λ
-        lambda_pre = lambda_value
-        
-        # POST λ (遅延)
-        if len(self.lambda_history) >= self.gate_delay:
-            lambda_post = self.lambda_history[-self.gate_delay]
-        else:
-            lambda_post = lambda_value
-        
-        self.lambda_history.append(lambda_value)
-        
-        # 位相蓄積
-        if self.phi_history:
-            phi = self.phi_history[-1] + lambda_value * dt
-        else:
-            phi = lambda_value * dt
-        self.phi_history.append(phi)
-        
-        # S_RT (Bulk entropy) - 簡易版
-        if len(self.phi_history) >= 2:
-            phi_arr = np.array(self.phi_history[-20:])  # 最新20点
-            S_RT = np.std(phi_arr) * np.log(len(phi_arr) + 1)
-        else:
-            S_RT = 0.0
-        self.S_RT_history.append(S_RT)
-        
-        return {
-            'lambda_pre': lambda_pre,
-            'lambda_post': lambda_post,
-            'phi': phi,
-            'S_RT': S_RT
-        }
-    
-    def verify_duality(self) -> DualityMetrics:
-        """双対性を検証"""
-        if len(self.lambda_history) < 10:
-            return DualityMetrics(0, 0, 1.0, 0, 0)
-        
-        boundary = np.array(self.lambda_history)
-        bulk = np.array(self.S_RT_history)
-        
-        # Transfer Entropy (簡易版)
-        # TE(X→Y) ≈ correlation(X[:-1], Y[1:])
-        TE_b2B = abs(np.corrcoef(boundary[:-1], bulk[1:])[0, 1])
-        TE_B2b = abs(np.corrcoef(bulk[:-1], boundary[1:])[0, 1])
-        
-        # 相互相関でベストラグを探す
-        max_corr = 0.0
-        best_lag = 0
-        for lag in range(-10, 11):
-            if lag == 0:
-                continue
-            if lag > 0:
-                corr = abs(np.corrcoef(boundary[:-lag], bulk[lag:])[0, 1])
-            else:
-                corr = abs(np.corrcoef(boundary[-lag:], bulk[:lag])[0, 1])
-            if corr > max_corr:
-                max_corr = corr
-                best_lag = lag
-        
-        # Duality index
-        denom = TE_b2B + TE_B2b + 1e-10
-        duality_index = abs(TE_b2B - TE_B2b) / denom
-        
-        return DualityMetrics(
-            TE_bulk_to_boundary=float(TE_B2b),
-            TE_boundary_to_bulk=float(TE_b2B),
-            duality_index=float(duality_index),
-            best_lag=best_lag,
-            max_correlation=float(max_corr)
-        )
-
-
-# =============================================================================
 # Main Class: ThermalHolographicEvolution
 # =============================================================================
 
@@ -548,70 +262,98 @@ class ThermalHolographicEvolution:
     温度変化 × Memory効果 × Holographic測定 × 材料破壊予測
     
     【統合アーキテクチャ】
-      Temperature Path
-          ↓
       ThermalEnsemble (温度→分布→状態)
           ↓
       DSESolver (Memory付き時間発展)
           ↓
       HolographicMeasurement (PRE/POST λ, S_RT)
           ↓
-      TopologyAnalysis (Coherence, Lindemann, 破壊予測)
+      ThermalTopologyAnalyzer (Coherence, Lindemann, 破壊予測)
+          ↓
+      material_failure (計測・予測)
     
     Usage:
         # Hubbard モデルで初期化
-        evolution = ThermalHolographicEvolution.from_hubbard(n_sites=4, t=1.0, U=2.0)
+        evolution = ThermalHolographicEvolution.from_hubbard(n_sites=4)
         
         # 急冷
-        result_quench = evolution.quench(T_start=1000, T_end=100, n_steps=50)
+        result_quench = evolution.quench(T_start=1000, T_end=100)
         
         # 徐冷
-        result_anneal = evolution.anneal(T_start=1000, T_end=100, n_steps=50)
+        result_anneal = evolution.anneal(T_start=1000, T_end=100)
         
         # 比較
         evolution.compare(result_quench, result_anneal)
     """
     
     def __init__(self,
-                 ensemble: LightweightThermalEnsemble,
-                 solver: LightweightDSESolver,
-                 measurement: LightweightHolographicMeasurement,
+                 H_K: np.ndarray,
+                 H_V: np.ndarray,
+                 ensemble: ThermalEnsemble,
+                 solver: DSESolver,
+                 measurement: HolographicMeasurement,
+                 thermal_analyzer: ThermalTopologyAnalyzer,
                  lindemann_critical: float = 0.1):
         """
         Args:
+            H_K: 運動エネルギー項
+            H_V: ポテンシャル項
             ensemble: 熱アンサンブル
             solver: DSE ソルバー
             measurement: Holographic 測定器
+            thermal_analyzer: 熱トポロジー解析器
             lindemann_critical: Lindemann 臨界値
         """
+        self.H_K = H_K
+        self.H_V = H_V
+        self.H = H_K + H_V
         self.ensemble = ensemble
         self.solver = solver
         self.measurement = measurement
+        self.thermal_analyzer = thermal_analyzer
         self.lindemann_critical = lindemann_critical
     
     @classmethod
     def from_hubbard(cls, n_sites: int = 4, t: float = 1.0, U: float = 2.0,
                      gamma_memory: float = 0.1, eta_memory: float = 0.1,
-                     gate_delay: int = 1) -> 'ThermalHolographicEvolution':
+                     gate_delay: int = 1,
+                     n_eigenstates: int = 20) -> 'ThermalHolographicEvolution':
         """
         Hubbard モデルから初期化
-        
-        Args:
-            n_sites: サイト数
-            t: ホッピング
-            U: オンサイト相互作用
-            gamma_memory: Memory 減衰率
-            eta_memory: Memory 混合率
-            gate_delay: 測定遅延
         """
         H_K, H_V = cls._build_hubbard(n_sites, t, U)
         H = H_K + H_V
         
-        ensemble = LightweightThermalEnsemble(H)
-        solver = LightweightDSESolver(H_K, H_V, gamma_memory, eta_memory)
-        measurement = LightweightHolographicMeasurement(gate_delay)
+        # ThermalEnsemble (from environment_operators.py)
+        ensemble = ThermalEnsemble(H, n_eigenstates=n_eigenstates)
         
-        return cls(ensemble, solver, measurement)
+        # DSESolver (from dse_solver.py)
+        solver = DSESolver(H_K, H_V, gamma_memory=gamma_memory, eta_memory=eta_memory)
+        
+        # HolographicMeasurement (from holographic/measurement.py)
+        measurement = HolographicMeasurement(gate_delay=gate_delay)
+        
+        # ThermalTopologyAnalyzer (from material_failure.py)
+        thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
+        
+        return cls(H_K, H_V, ensemble, solver, measurement, thermal_analyzer)
+    
+    @classmethod
+    def from_hamiltonian(cls, H_K: np.ndarray, H_V: np.ndarray,
+                         gamma_memory: float = 0.1, eta_memory: float = 0.1,
+                         gate_delay: int = 1,
+                         n_eigenstates: int = 20) -> 'ThermalHolographicEvolution':
+        """
+        任意のハミルトニアンから初期化
+        """
+        H = H_K + H_V
+        
+        ensemble = ThermalEnsemble(H, n_eigenstates=n_eigenstates)
+        solver = DSESolver(H_K, H_V, gamma_memory=gamma_memory, eta_memory=eta_memory)
+        measurement = HolographicMeasurement(gate_delay=gate_delay)
+        thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
+        
+        return cls(H_K, H_V, ensemble, solver, measurement, thermal_analyzer)
     
     @staticmethod
     def _build_hubbard(n_sites: int, t: float, U: float) -> Tuple[np.ndarray, np.ndarray]:
@@ -656,19 +398,11 @@ class ThermalHolographicEvolution:
                verbose: bool = True) -> ThermalHolographicResult:
         """
         温度パスに沿って発展
-        
-        Args:
-            thermal_path: 温度パス
-            verbose: 詳細出力
-        
-        Returns:
-            ThermalHolographicResult
         """
         # リセット
         self.solver.reset()
         self.measurement.reset()
         
-        # 温度・dt 列を生成
         T_values, dt_values = thermal_path.generate()
         
         # 初期状態
@@ -685,18 +419,17 @@ class ThermalHolographicEvolution:
             print("=" * 60)
         
         for step, (T, dt) in enumerate(zip(T_values, dt_values)):
-            # 熱的状態を取得（温度変化を反映）
-            psi_thermal = self.ensemble.get_thermal_state(T)
-            
             # DSE 発展 (Memory 効果付き)
             psi, solver_info = self.solver.step(psi, dt)
             
             # Holographic 測定
             holo_info = self.measurement.measure(solver_info['lambda'], dt)
             
-            # Topology 解析
-            coherence = self.ensemble.compute_coherence(T)
-            lindemann = self.ensemble.compute_lindemann(T)
+            # Topology 解析 (material_failure.py)
+            thermal_result = self.thermal_analyzer.analyze_temperature(T)
+            coherence = thermal_result.coherence
+            lindemann = thermal_result.lindemann_delta
+            
             topology_state = self._determine_topology_state(
                 coherence, lindemann, solver_info['lambda']
             )
@@ -723,7 +456,6 @@ class ThermalHolographicEvolution:
             )
             records.append(record)
             
-            # 進捗表示
             if verbose and step % max(1, thermal_path.n_steps // 10) == 0:
                 print(f"  Step {step:4d}: T={T:7.1f}K  λ={solver_info['lambda']:.4f}  "
                       f"Coh={coherence:.3f}  δ={lindemann:.4f}  [{topology_state.value}]")
@@ -736,15 +468,30 @@ class ThermalHolographicEvolution:
         result.compute_summary()
         
         # 双対性検証
-        result.duality = self.measurement.verify_duality()
+        result.duality = self._verify_duality()
         
         # 破壊予測
         result.failure = self._predict_failure(records)
+        
+        # 最終温度での Topology 結果
+        result.thermal_topology = self.thermal_analyzer.analyze_temperature(T_values[-1])
         
         if verbose:
             self._print_summary(result)
         
         return result
+    
+    def _verify_duality(self) -> DualityMetrics:
+        """双対性を検証"""
+        duality_result = self.measurement.verify_duality()
+        
+        return DualityMetrics(
+            TE_bulk_to_boundary=duality_result.get('TE_bulk_to_boundary', 0.0),
+            TE_boundary_to_bulk=duality_result.get('TE_boundary_to_bulk', 0.0),
+            duality_index=duality_result.get('duality_index', 1.0),
+            best_lag=duality_result.get('best_lag', 0),
+            max_correlation=duality_result.get('max_corr', 0.0)
+        )
     
     def _predict_failure(self, records: List[ThermalHolographicRecord]) -> FailurePrediction:
         """破壊を予測"""
@@ -754,7 +501,7 @@ class ThermalHolographicEvolution:
                     will_fail=True,
                     failure_step=record.step,
                     failure_temperature=record.temperature,
-                    failure_site=0,  # TODO: local analysis
+                    failure_site=0,
                     failure_mechanism='mechanical',
                     lambda_at_failure=record.lambda_value,
                     confidence=0.9
@@ -789,17 +536,17 @@ class ThermalHolographicEvolution:
         print(f"  λ range: [{result.lambda_range[0]:.4f}, {result.lambda_range[1]:.4f}]")
         print(f"  Coherence range: [{result.coherence_range[0]:.4f}, {result.coherence_range[1]:.4f}]")
         
-        print("\n--- Duality ---")
+        print("\n--- Duality (AdS/CFT) ---")
         d = result.duality
         print(f"  TE(Bulk→Boundary): {d.TE_bulk_to_boundary:.4f}")
         print(f"  TE(Boundary→Bulk): {d.TE_boundary_to_bulk:.4f}")
         print(f"  Duality Index: {d.duality_index:.4f}")
         if d.is_strong_duality():
-            print("  ✓ STRONG DUALITY")
+            print("  ✓ STRONG DUALITY (結び目凍結 = 残留応力)")
         elif d.is_moderate_duality():
             print("  ○ MODERATE DUALITY")
         else:
-            print("  ✗ WEAK DUALITY")
+            print("  ✗ WEAK DUALITY (結び目緩和 = 応力解放)")
         
         print("\n--- Failure Prediction ---")
         f = result.failure
@@ -830,17 +577,29 @@ class ThermalHolographicEvolution:
         path = ThermalPath(T_start, T_end, n_steps, CoolingMode.ANNEAL)
         return self.evolve(path, verbose)
     
-    def linear_cooling(self, T_start: float = 1000, T_end: float = 100,
-                       n_steps: int = 50, verbose: bool = True) -> ThermalHolographicResult:
-        """線形冷却"""
-        path = ThermalPath(T_start, T_end, n_steps, CoolingMode.LINEAR)
-        return self.evolve(path, verbose)
-    
-    def exponential_cooling(self, T_start: float = 1000, T_end: float = 100,
-                            n_steps: int = 50, verbose: bool = True) -> ThermalHolographicResult:
-        """指数的冷却"""
-        path = ThermalPath(T_start, T_end, n_steps, CoolingMode.EXPONENTIAL)
-        return self.evolve(path, verbose)
+    def thermal_cycle(self, T_low: float = 100, T_high: float = 1000,
+                      n_cycles: int = 3, steps_per_cycle: int = 20,
+                      verbose: bool = True) -> List[ThermalHolographicResult]:
+        """熱サイクル（加熱・冷却の繰り返し）"""
+        results = []
+        for cycle in range(n_cycles):
+            if verbose:
+                print(f"\n🔄 Cycle {cycle + 1}/{n_cycles}")
+            
+            # 加熱
+            path_heat = ThermalPath(T_low, T_high, steps_per_cycle, CoolingMode.LINEAR)
+            result_heat = self.evolve(path_heat, verbose=False)
+            results.append(result_heat)
+            
+            # 冷却
+            path_cool = ThermalPath(T_high, T_low, steps_per_cycle, CoolingMode.LINEAR)
+            result_cool = self.evolve(path_cool, verbose=False)
+            results.append(result_cool)
+        
+        if verbose:
+            print(f"\n✅ Completed {n_cycles} thermal cycles")
+        
+        return results
     
     def compare(self, result1: ThermalHolographicResult,
                 result2: ThermalHolographicResult,
@@ -854,81 +613,60 @@ class ThermalHolographicEvolution:
         print(f"\n{'Metric':<25} {label1:<20} {label2:<20}")
         print("-" * 65)
         
-        # λ range
         print(f"{'λ min':<25} {result1.lambda_range[0]:<20.4f} {result2.lambda_range[0]:<20.4f}")
         print(f"{'λ max':<25} {result1.lambda_range[1]:<20.4f} {result2.lambda_range[1]:<20.4f}")
-        
-        # Coherence
         print(f"{'Coherence min':<25} {result1.coherence_range[0]:<20.4f} {result2.coherence_range[0]:<20.4f}")
         print(f"{'Coherence max':<25} {result1.coherence_range[1]:<20.4f} {result2.coherence_range[1]:<20.4f}")
-        
-        # Duality
         print(f"{'Duality Index':<25} {result1.duality.duality_index:<20.4f} {result2.duality.duality_index:<20.4f}")
         
-        # Failure
         f1 = "YES" if result1.failure.will_fail else "NO"
         f2 = "YES" if result2.failure.will_fail else "NO"
         print(f"{'Failure':<25} {f1:<20} {f2:<20}")
         
-        if result1.failure.will_fail:
-            print(f"{'  Mechanism':<25} {result1.failure.failure_mechanism:<20}")
-        if result2.failure.will_fail:
-            print(f"{'  Mechanism':<25} {'':20} {result2.failure.failure_mechanism:<20}")
-        
         print("-" * 65)
         
-        # Memory 効果の違い
         mem1 = np.mean([r.memory_contribution for r in result1.records])
         mem2 = np.mean([r.memory_contribution for r in result2.records])
         print(f"{'Avg Memory Contribution':<25} {mem1:<20.4f} {mem2:<20.4f}")
+        
+        # 物理的解釈
+        print("\n--- Physical Interpretation ---")
+        if result1.duality.duality_index < result2.duality.duality_index:
+            print(f"  {label1}: 結び目凍結 → 残留応力 大")
+            print(f"  {label2}: 結び目緩和 → 残留応力 小")
+        else:
+            print(f"  {label1}: 結び目緩和 → 残留応力 小")
+            print(f"  {label2}: 結び目凍結 → 残留応力 大")
         
         print("\n" + "=" * 65)
 
 
 # =============================================================================
-# Test
+# Info Function
 # =============================================================================
 
-def run_thermal_holographic_test():
-    """テストを実行"""
-    print("\n" + "🔬" * 30)
-    print("THERMAL HOLOGRAPHIC EVOLUTION TEST")
-    print("🔬" * 30 + "\n")
-    
-    # Hubbard モデルで初期化
-    evolution = ThermalHolographicEvolution.from_hubbard(
-        n_sites=4, t=1.0, U=2.0,
-        gamma_memory=0.3, eta_memory=0.15
-    )
-    
-    print("✅ Built 4-site Hubbard system\n")
-    
-    # 急冷テスト
-    print("\n" + "=" * 60)
-    print("TEST 1: QUENCH (急冷)")
+def info():
+    """パッケージ情報を表示"""
     print("=" * 60)
-    result_quench = evolution.quench(T_start=1000, T_end=100, n_steps=30)
-    
-    # 徐冷テスト
-    print("\n" + "=" * 60)
-    print("TEST 2: ANNEAL (徐冷)")
+    print("Thermal Holographic Evolution")
     print("=" * 60)
-    result_anneal = evolution.anneal(T_start=1000, T_end=100, n_steps=30)
-    
-    # 比較
-    evolution.compare(result_quench, result_anneal, "QUENCH", "ANNEAL")
-    
-    # 追加: 指数的冷却
-    print("\n" + "=" * 60)
-    print("TEST 3: EXPONENTIAL COOLING")
+    print()
+    print("Physical Constants:")
+    print(f"  τ₀ (Debye period):     {TAU_0:.0e} s")
+    print(f"  c (light speed):       {C_LIGHT:.0e} m/s")
+    print(f"  v_s (sound speed):     {V_SOUND:.0e} m/s")
+    print()
+    print("Characteristic Lengths:")
+    print(f"  λ_light = c×τ₀:        {LAMBDA_LIGHT*1e6:.0f} μm (grain size)")
+    print(f"  λ_phonon = v_s×τ₀:     {LAMBDA_PHONON*1e9:.1f} nm (lattice)")
+    print(f"  Scale ratio c/v_s:     {SCALE_RATIO:.0f}")
+    print()
+    print("Core Insight:")
+    print("  Energy = Topology (結び目)")
+    print("  Quench → 残留応力 (結び目凍結) → Strong Duality")
+    print("  Anneal → 応力解放 (結び目緩和) → Weak Duality")
+    print("  第5の力 = トポロジカル結び目のリコネクション")
     print("=" * 60)
-    result_exp = evolution.exponential_cooling(T_start=1000, T_end=100, n_steps=30)
-    
-    return {
-        'quench': result_quench,
-        'anneal': result_anneal,
-        'exponential': result_exp
-    }
 
 
 # =============================================================================
@@ -936,8 +674,4 @@ def run_thermal_holographic_test():
 # =============================================================================
 
 if __name__ == "__main__":
-    results = run_thermal_holographic_test()
-    
-    print("\n" + "✅" * 30)
-    print("ALL TESTS COMPLETED")
-    print("✅" * 30)
+    info()
