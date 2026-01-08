@@ -25,6 +25,18 @@ DSE (Direct Schrödinger Evolution) ソルバーとメモリ指標
 Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
+from .thermal_holographic import (
+    ThermalHolographicEvolution,
+    CoolingMode,
+    ThermalPath,
+    info,
+    # 物理定数
+    TAU_0,
+    LAMBDA_LIGHT,
+    LAMBDA_PHONON,
+    SCALE_RATIO,
+)
+
 from .dse_solver import (
     # Main solver
     DSESolver,
@@ -49,6 +61,29 @@ from .memory_indicators import (
 )
 
 __all__ = [
+    "ThermalHolographicEvolution",
+    # Data classes
+    "ThermalHolographicRecord",
+    "ThermalHolographicResult",
+    "ThermalPath",
+    "DualityMetrics",
+    "FailurePrediction",
+    
+    # Enums
+    "CoolingMode",
+    "TopologyState",
+    
+    # Constants
+    "TAU_0",
+    "C_LIGHT",
+    "V_SOUND",
+    "LAMBDA_LIGHT",
+    "LAMBDA_PHONON",
+    "SCALE_RATIO",
+
+    # Utility
+    "info",
+  
     # Solver
     'DSESolver',
     'DSEResult',
