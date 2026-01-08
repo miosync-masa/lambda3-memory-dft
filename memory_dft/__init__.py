@@ -102,6 +102,18 @@ from .solvers.memory_indicators import (
     # Hysteresis analysis
     HysteresisAnalyzer,
 )
+
+from .solvers.thermal_holographic import (
+    ThermalHolographicEvolution,
+    CoolingMode,
+    ThermalPath,
+    info,
+    # 物理定数
+    TAU_0,
+    LAMBDA_LIGHT,
+    LAMBDA_PHONON,
+    SCALE_RATIO,
+)
 # =============================================================================
 # Physics
 # =============================================================================
@@ -312,6 +324,31 @@ __all__ = [
     # Utility
     'lanczos_expm_multiply',
     'quick_dse',
+
+     # Main class
+    "ThermalHolographicEvolution",
+    
+    # Data classes
+    "ThermalHolographicRecord",
+    "ThermalHolographicResult",
+    "ThermalPath",
+    "DualityMetrics",
+    "FailurePrediction",
+    
+    # Enums
+    "CoolingMode",
+    "TopologyState",
+    
+    # Constants
+    "TAU_0",
+    "C_LIGHT",
+    "V_SOUND",
+    "LAMBDA_LIGHT",
+    "LAMBDA_PHONON",
+    "SCALE_RATIO",
+    
+    # Utility
+    "info",
   
     # Physics - Stability
     'Lambda3Calculator',
