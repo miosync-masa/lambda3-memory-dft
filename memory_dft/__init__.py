@@ -17,12 +17,16 @@ from .core.sparse_engine_unified import (
     # Geometry
     SystemGeometry,
     LatticeGeometry2D,
+    HubbardAndersonGeometry, 
     
     # Factory functions
     create_chain,
     create_ladder,
     create_square_lattice,
-    
+    # Hubbard-Anderson
+    HubbardAndersonParams,
+    LayerEnergies,
+    LayerLambda,
     # Result container
     ComputeResult,
 )
@@ -104,15 +108,30 @@ from .solvers.memory_indicators import (
 )
 
 from .solvers.thermal_holographic import (
+    # Main class
     ThermalHolographicEvolution,
-    CoolingMode,
+    
+    # Data classes
+    ThermalHolographicRecord,   # ← 追加
+    ThermalHolographicResult,   # ← 追加
     ThermalPath,
-    info,
-    # 物理定数
+    DualityMetrics,             # ← 追加
+    # FailurePrediction,        # material_failure と被るから注意
+    
+    # Enums
+    CoolingMode,
+    TopologyState,              # ← 追加
+    
+    # Constants
     TAU_0,
+    C_LIGHT,                    # ← 追加
+    V_SOUND,                    # ← 追加
     LAMBDA_LIGHT,
     LAMBDA_PHONON,
     SCALE_RATIO,
+    
+    # Utility
+    info,
 )
 # =============================================================================
 # Physics
@@ -242,7 +261,13 @@ __all__ = [
     'create_ladder',
     'create_square_lattice',
 
-       # Data Classes
+    # HubbardAnderson
+    "HubbardAndersonGeometry",
+    "HubbardAndersonParams",
+    "LayerEnergies",
+    "LayerLambda",
+
+    # Data Classes
     'TopologyResult',
     'ThermalTopologyResult',
     'StressTopologyResult',
@@ -325,7 +350,7 @@ __all__ = [
     'lanczos_expm_multiply',
     'quick_dse',
 
-     # Main class
+    # Main class
     "ThermalHolographicEvolution",
     
     # Data classes
@@ -333,7 +358,6 @@ __all__ = [
     "ThermalHolographicResult",
     "ThermalPath",
     "DualityMetrics",
-    "FailurePrediction",
     
     # Enums
     "CoolingMode",
