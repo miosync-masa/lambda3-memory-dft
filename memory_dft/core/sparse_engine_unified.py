@@ -46,6 +46,134 @@ from scipy.sparse.linalg import eigsh as eigsh_cpu
 
 
 # =============================================================================
+# Geometry Classes (HubbardAnderson)
+# =============================================================================
+
+@dataclass
+class HubbardAndersonGeometry:
+    """
+    Hubbard-Anderson モデルの幾何構造
+    
+    【階層的トポロジー】
+      L₀: Fe 格子トポロジー（bonds_Fe）
+      L₁: C 配置トポロジー（C_sites）
+      L₂: Fe-C 混成トポロジー（bonds_FeC）
+    """
+    n_Fe: int                           # Fe サイト数
+    n_C: int                            # C サイト数
+    n_total: int                        # 全サイト数
+    Fe_sites: List[int]                 # Fe サイトのインデックス
+    C_sites: List[int]                  # C サイトのインデックス
+    bonds_Fe: List[Tuple[int, int]]     # Fe-Fe ボンド（L₀）
+    bonds_FeC: List[Tuple[int, int]]    # Fe-C ボンド（L₂）
+    C_neighbors: Dict[int, List[int]]   # 各 C の隣接 Fe サイト
+    C_positions: List[int] = field(default_factory=list)  # C の挿入位置
+    periodic: bool = True               # 周期境界条件
+    
+    @property
+    def dim(self) -> int:
+        return 2 ** self.n_total
+    
+    @property
+    def bonds(self) -> List[Tuple[int, int]]:
+        """全ボンド（Fe-Fe + Fe-C）"""
+        return self.bonds_Fe + self.bonds_FeC
+    
+    def __repr__(self) -> str:
+        return (f"HubbardAndersonGeometry(Fe={self.n_Fe}, C={self.n_C}, "
+                f"bonds_Fe={len(self.bonds_Fe)}, bonds_FeC={len(self.bonds_FeC)})")
+
+
+@dataclass
+class HubbardAndersonParams:
+    """
+    Hubbard-Anderson モデルのパラメータ
+    
+    【物理的意味】
+      t_Fe:      Fe-Fe ホッピング（電子の移動）
+      U_Fe:      Fe-Fe 相互作用（電子間反発）
+      epsilon_C: C サイトエネルギー（深い井戸 = 負）
+      t_mix:     Fe-C 混成（電子の Fe↔C 移動）
+      U_FeC:     Fe-C 相互作用（密度-密度）
+      D_C:       C 拡散係数（動的計算用）
+      
+    【緩和時間スケール】
+      電子（t_Fe, t_mix）: τ ≈ 10⁻¹⁵ s
+      格子（振動）:        τ ≈ 10⁻¹³ s = τ₀
+      拡散（D_C）:         τ ≈ 10⁻⁶ ~ 10⁰ s
+    """
+    # Fe パラメータ
+    t_Fe: float = 1.0       # Fe-Fe ホッピング
+    U_Fe: float = 2.0       # Fe-Fe オンサイト相互作用
+    
+    # C パラメータ
+    epsilon_C: float = -3.0 # C サイトエネルギー（負 = 深い井戸）
+    
+    # 混成パラメータ
+    t_mix: float = 0.5      # Fe-C ホッピング（混成）
+    U_FeC: float = 1.0      # Fe-C 密度-密度相互作用
+    
+    # 拡散パラメータ（動的計算用）
+    D_C: float = 1e-10      # C の拡散係数 (m²/s)、高温時
+    
+    def get_scale_info(self) -> Dict[str, float]:
+        """スケール情報を取得"""
+        TAU_0 = 1e-13  # s
+        C_LIGHT = 3e8  # m/s
+        V_SOUND = 5000 # m/s
+        
+        return {
+            'tau_0': TAU_0,
+            'lambda_light': C_LIGHT * TAU_0,      # 30 μm
+            'lambda_phonon': V_SOUND * TAU_0,     # 0.5 nm
+            'scale_ratio': C_LIGHT / V_SOUND,     # 60,000
+            'diffusion_length_tau0': np.sqrt(self.D_C * TAU_0),  # ≈ 0.03 Å
+        }
+    
+    def __repr__(self):
+        return (f"HubbardAndersonParams(t_Fe={self.t_Fe}, U_Fe={self.U_Fe}, "
+                f"ε_C={self.epsilon_C}, t_mix={self.t_mix}, U_FeC={self.U_FeC})")
+
+
+@dataclass
+class LayerEnergies:
+    """各層のエネルギー内訳"""
+    E_Fe_K: float      # Fe ホッピングエネルギー
+    E_Fe_V: float      # Fe 相互作用エネルギー
+    E_C: float         # C サイトエネルギー
+    E_mix_K: float     # Fe-C 混成エネルギー
+    E_mix_V: float     # Fe-C 相互作用エネルギー
+    
+    @property
+    def E_total(self) -> float:
+        return self.E_Fe_K + self.E_Fe_V + self.E_C + self.E_mix_K + self.E_mix_V
+    
+    @property
+    def K_total(self) -> float:
+        """全運動エネルギー"""
+        return abs(self.E_Fe_K) + abs(self.E_mix_K)
+    
+    @property
+    def V_total(self) -> float:
+        """全ポテンシャルエネルギー"""
+        return abs(self.E_Fe_V) + abs(self.E_C) + abs(self.E_mix_V)
+
+
+@dataclass
+class LayerLambda:
+    """各層の λ = K/|V|"""
+    lambda_Fe: float      # Fe 層の λ
+    lambda_C: float       # C 層（混成含む）の λ
+    lambda_total: float   # 全体の λ
+    lambda_mismatch: float = 0.0  # 層間ミスマッチ
+    
+    def __post_init__(self):
+        # 層間ミスマッチ = |λ_Fe - λ_C| / max(λ_Fe, λ_C)
+        max_lambda = max(self.lambda_Fe, self.lambda_C)
+        if max_lambda > 1e-10:
+            self.lambda_mismatch = abs(self.lambda_Fe - self.lambda_C) / max_lambda
+
+# =============================================================================
 # Geometry Classes (merged from lattice.py)
 # =============================================================================
 
@@ -556,6 +684,247 @@ class SparseEngine:
     
     # =========================================================================
     # Hamiltonian Construction
+    # =========================================================================
+
+    # =========================================================================
+    # Hubbard-Anderson Model
+    # =========================================================================
+    
+    def build_Fe_chain_with_C(self, n_Fe: int = 4, 
+                               C_positions: List[int] = None,
+                               periodic: bool = True) -> HubbardAndersonGeometry:
+        '''
+        1D Fe チェーンに C を侵入させた構造
+        
+        Args:
+            n_Fe: Fe サイト数
+            C_positions: C が入る位置（Fe サイト間）
+            periodic: 周期境界条件
+            
+        Returns:
+            HubbardAndersonGeometry
+        '''
+        if C_positions is None:
+            C_positions = []
+        
+        n_C = len(C_positions)
+        n_total = n_Fe + n_C
+        
+        # サイト割り当て: Fe = 0..n_Fe-1, C = n_Fe..n_total-1
+        Fe_sites = list(range(n_Fe))
+        C_sites = list(range(n_Fe, n_total))
+        
+        # Fe-Fe ボンド
+        if periodic:
+            bonds_Fe = [(i, (i + 1) % n_Fe) for i in range(n_Fe)]
+        else:
+            bonds_Fe = [(i, i + 1) for i in range(n_Fe - 1)]
+        
+        # Fe-C ボンド
+        bonds_FeC = []
+        C_neighbors = {}
+        
+        for c_idx, c_pos in enumerate(C_positions):
+            c_site = n_Fe + c_idx
+            neighbors = []
+            
+            # C は位置 c_pos と c_pos+1 の Fe に隣接
+            fe_left = c_pos % n_Fe
+            fe_right = (c_pos + 1) % n_Fe
+            
+            neighbors.append(fe_left)
+            bonds_FeC.append((fe_left, c_site))
+            
+            if periodic or (c_pos + 1) < n_Fe:
+                neighbors.append(fe_right)
+                bonds_FeC.append((fe_right, c_site))
+            
+            C_neighbors[c_site] = neighbors
+        
+        return HubbardAndersonGeometry(
+            n_Fe=n_Fe,
+            n_C=n_C,
+            n_total=n_total,
+            Fe_sites=Fe_sites,
+            C_sites=C_sites,
+            bonds_Fe=bonds_Fe,
+            bonds_FeC=bonds_FeC,
+            C_neighbors=C_neighbors,
+            C_positions=C_positions,
+            periodic=periodic
+        )
+    
+    def build_hubbard_anderson(self,
+                               geometry: HubbardAndersonGeometry,
+                               params: HubbardAndersonParams = None,
+                               split_KV: bool = True):
+        '''
+        Hubbard-Anderson ハミルトニアンを構築
+        
+        H = H_Fe + H_C + H_Fe-C
+        
+        【階層的トポロジー】
+          H_Fe:   Fe 格子トポロジー上のホッピング + 相互作用
+          H_C:    C サイトの深い井戸
+          H_Fe-C: Fe-C 混成 + 相互作用
+        
+        Args:
+            geometry: HubbardAndersonGeometry
+            params: HubbardAndersonParams
+            split_KV: True なら (H_K, H_V) を返す
+            
+        Returns:
+            split_KV=True: (H_K, H_V)
+            split_KV=False: H_total
+        '''
+        if params is None:
+            params = HubbardAndersonParams()
+        
+        # サイト数チェック
+        if self.n_sites != geometry.n_total:
+            raise ValueError(f"Engine has {self.n_sites} sites, "
+                            f"but geometry has {geometry.n_total}")
+        
+        H_K = None  # ホッピング項
+        H_V = None  # 相互作用項
+        
+        # =====================================================
+        # H_Fe: Fe-Fe Hubbard
+        # =====================================================
+        
+        for (i, j) in geometry.bonds_Fe:
+            # Fe-Fe ホッピング
+            term_hop = -params.t_Fe * (self.Sp[i] @ self.Sm[j] + 
+                                       self.Sm[i] @ self.Sp[j])
+            H_K = term_hop if H_K is None else H_K + term_hop
+            
+            # Fe-Fe 密度-密度相互作用
+            n_i = self.Sz[i] + 0.5 * self._build_site_operator(self.I_single, i)
+            n_j = self.Sz[j] + 0.5 * self._build_site_operator(self.I_single, j)
+            term_U = params.U_Fe * n_i @ n_j
+            H_V = term_U if H_V is None else H_V + term_U
+        
+        # =====================================================
+        # H_C: C サイトエネルギー（深い井戸）
+        # =====================================================
+        
+        for c in geometry.C_sites:
+            n_c = self.Sz[c] + 0.5 * self._build_site_operator(self.I_single, c)
+            term_eps = params.epsilon_C * n_c
+            H_V = H_V + term_eps
+        
+        # =====================================================
+        # H_Fe-C: 混成項
+        # =====================================================
+        
+        for (fe, c) in geometry.bonds_FeC:
+            # Fe-C ホッピング（混成）
+            term_mix = -params.t_mix * (self.Sp[fe] @ self.Sm[c] + 
+                                        self.Sm[fe] @ self.Sp[c])
+            H_K = H_K + term_mix
+            
+            # Fe-C 密度-密度相互作用
+            n_fe = self.Sz[fe] + 0.5 * self._build_site_operator(self.I_single, fe)
+            n_c = self.Sz[c] + 0.5 * self._build_site_operator(self.I_single, c)
+            term_U = params.U_FeC * n_fe @ n_c
+            H_V = H_V + term_U
+        
+        if split_KV:
+            return H_K, H_V
+        else:
+            return H_K + H_V
+    
+    def compute_layer_energies(self, psi,
+                               geometry: HubbardAndersonGeometry,
+                               params: HubbardAndersonParams) -> LayerEnergies:
+        '''各層のエネルギー寄与を計算'''
+        xp = self.xp
+        
+        # Fe ホッピング
+        E_Fe_K = 0.0
+        for (i, j) in geometry.bonds_Fe:
+            term = -params.t_Fe * (self.Sp[i] @ self.Sm[j] + self.Sm[i] @ self.Sp[j])
+            E_Fe_K += float(xp.real(xp.vdot(psi, term @ psi)))
+        
+        # Fe 相互作用
+        E_Fe_V = 0.0
+        for (i, j) in geometry.bonds_Fe:
+            n_i = self.Sz[i] + 0.5 * self._build_site_operator(self.I_single, i)
+            n_j = self.Sz[j] + 0.5 * self._build_site_operator(self.I_single, j)
+            term = params.U_Fe * n_i @ n_j
+            E_Fe_V += float(xp.real(xp.vdot(psi, term @ psi)))
+        
+        # C サイトエネルギー
+        E_C = 0.0
+        for c in geometry.C_sites:
+            n_c = self.Sz[c] + 0.5 * self._build_site_operator(self.I_single, c)
+            term = params.epsilon_C * n_c
+            E_C += float(xp.real(xp.vdot(psi, term @ psi)))
+        
+        # Fe-C 混成
+        E_mix_K = 0.0
+        for (fe, c) in geometry.bonds_FeC:
+            term = -params.t_mix * (self.Sp[fe] @ self.Sm[c] + self.Sm[fe] @ self.Sp[c])
+            E_mix_K += float(xp.real(xp.vdot(psi, term @ psi)))
+        
+        # Fe-C 相互作用
+        E_mix_V = 0.0
+        for (fe, c) in geometry.bonds_FeC:
+            n_fe = self.Sz[fe] + 0.5 * self._build_site_operator(self.I_single, fe)
+            n_c = self.Sz[c] + 0.5 * self._build_site_operator(self.I_single, c)
+            term = params.U_FeC * n_fe @ n_c
+            E_mix_V += float(xp.real(xp.vdot(psi, term @ psi)))
+        
+        return LayerEnergies(
+            E_Fe_K=E_Fe_K,
+            E_Fe_V=E_Fe_V,
+            E_C=E_C,
+            E_mix_K=E_mix_K,
+            E_mix_V=E_mix_V
+        )
+    
+    def compute_layer_lambda(self, psi,
+                             geometry: HubbardAndersonGeometry,
+                             params: HubbardAndersonParams) -> LayerLambda:
+        '''各層の λ = K/|V| を計算'''
+        energies = self.compute_layer_energies(psi, geometry, params)
+        
+        eps = 1e-10
+        
+        # Fe 層
+        K_Fe = abs(energies.E_Fe_K)
+        V_Fe = abs(energies.E_Fe_V)
+        lambda_Fe = K_Fe / (V_Fe + eps)
+        
+        # C 層（混成含む）
+        K_C = abs(energies.E_mix_K)
+        V_C = abs(energies.E_C) + abs(energies.E_mix_V)
+        lambda_C = K_C / (V_C + eps)
+        
+        # 全体
+        lambda_total = energies.K_total / (energies.V_total + eps)
+        
+        return LayerLambda(
+            lambda_Fe=lambda_Fe,
+            lambda_C=lambda_C,
+            lambda_total=lambda_total
+        )
+    
+    def compute_C_occupation(self, psi,
+                             geometry: HubbardAndersonGeometry) -> Dict[int, float]:
+        '''各 C サイトの占有数を計算'''
+        xp = self.xp
+        occupations = {}
+        
+        for c in geometry.C_sites:
+            n_c = self.Sz[c] + 0.5 * self._build_site_operator(self.I_single, c)
+            occ = float(xp.real(xp.vdot(psi, n_c @ psi)))
+            occupations[c] = occ
+        
+        return occupations
+
+   # =========================================================================
+    # Hamiltonian
     # =========================================================================
     
     def build_heisenberg(self, bonds: Optional[List[Tuple[int, int]]] = None,
