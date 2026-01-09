@@ -26,15 +26,28 @@ Author: Masamichi Iizumi, Tamaki Iizumi
 """
 
 from .thermal_holographic import (
+    # Main class
     ThermalHolographicEvolution,
-    CoolingMode,
+    
+    # Data classes
+    ThermalHolographicRecord,
+    ThermalHolographicResult,
     ThermalPath,
-    info,
-    # 物理定数
+    DualityMetrics,
+    # Enums
+    CoolingMode,
+    TopologyState,
+    
+    # Constants
     TAU_0,
+    C_LIGHT,
+    V_SOUND,
     LAMBDA_LIGHT,
     LAMBDA_PHONON,
     SCALE_RATIO,
+    
+    # Utility
+    info,
 )
 
 from .dse_solver import (
@@ -69,7 +82,7 @@ __all__ = [
     "ThermalHolographicResult",
     "ThermalPath",
     "DualityMetrics",
-    "FailurePrediction",
+    # "FailurePrediction",  # material_failure のを使う
     
     # Enums
     "CoolingMode",
