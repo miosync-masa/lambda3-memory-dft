@@ -111,15 +111,7 @@ from .environment_operators import (
     K_B_J,
     H_EV,
     HBAR_EV,
-    # =========================================================================
-    # re-export
-    # =========================================================================
-    SparseEngine,
-    HubbardAndersonGeometry,
-    HubbardAndersonParams,
-    LayerEnergies,
-    LayerLambda,
-    
+
     # =========================================================================
     # DEPRECATED (後方互換性のため残す、警告が出る)
     # =========================================================================
@@ -156,7 +148,7 @@ __all__ = [
     "HistoryManagerGPU",
     "LambdaDensityCalculator",
 
-       # Data Classes
+    # Data Classes
     'TopologyResult',
     'ThermalTopologyResult',
     'StressTopologyResult',
