@@ -69,6 +69,8 @@ from .history_manager import (
     LambdaDensityCalculator,
 )
 
+
+
 from .environment_operators import (
     # =========================================================================
     # v2.0 NEW: ThermalEnsemble (正しい有限温度計算)
@@ -109,6 +111,14 @@ from .environment_operators import (
     K_B_J,
     H_EV,
     HBAR_EV,
+    # =========================================================================
+    # re-export
+    # =========================================================================
+    SparseEngine,
+    HubbardAndersonGeometry,
+    HubbardAndersonParams,
+    LayerEnergies,
+    LayerLambda,
     
     # =========================================================================
     # DEPRECATED (後方互換性のため残す、警告が出る)
