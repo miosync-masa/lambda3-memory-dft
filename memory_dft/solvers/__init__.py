@@ -61,7 +61,9 @@ from .memory_indicators import (
 )
 
 __all__ = [
+    # Main class
     "ThermalHolographicEvolution",
+    
     # Data classes
     "ThermalHolographicRecord",
     "ThermalHolographicResult",
@@ -80,7 +82,7 @@ __all__ = [
     "LAMBDA_LIGHT",
     "LAMBDA_PHONON",
     "SCALE_RATIO",
-
+    
     # Utility
     "info",
   
