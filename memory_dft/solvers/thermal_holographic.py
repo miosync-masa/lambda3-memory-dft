@@ -397,7 +397,7 @@ class ThermalHolographicEvolution:
         # 各コンポーネント初期化
         ensemble = ThermalEnsemble(engine, H, n_eigenstates=n_eigenstates)
         solver = DSESolver(H_K_dense, H_V_dense, 
-                          gamma_memory=gamma_memory, eta_memory=eta_memory)
+                          gamma_memory=gamma_memory, eta=eta_memory)
         measurement = HolographicMeasurement(gate_delay=gate_delay)
         thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
         
@@ -459,7 +459,7 @@ class ThermalHolographicEvolution:
         # 各コンポーネント初期化
         ensemble = ThermalEnsemble(engine, H, n_eigenstates=n_eigenstates)
         solver = DSESolver(H_K_dense, H_V_dense, 
-                          gamma_memory=gamma_memory, eta_memory=eta_memory)
+                          gamma_memory=gamma_memory, eta=eta_memory)
         measurement = HolographicMeasurement(gate_delay=gate_delay)
         thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
         
@@ -482,7 +482,7 @@ class ThermalHolographicEvolution:
         engine = SparseEngine(n_sites=n_sites, use_gpu=False, verbose=False)
         
         ensemble = ThermalEnsemble(engine, H, n_eigenstates=n_eigenstates)
-        solver = DSESolver(H_K, H_V, gamma_memory=gamma_memory, eta_memory=eta_memory)
+        solver = DSESolver(H_K, H_V, gamma_memory=gamma_memory, eta=eta_memory)
         measurement = HolographicMeasurement(gate_delay=gate_delay)
         thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
         
