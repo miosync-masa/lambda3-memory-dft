@@ -46,8 +46,14 @@ from scipy.sparse.linalg import eigsh
 
 # Type hints
 if TYPE_CHECKING:
-    from memory_dft.core.sparse_engine_unified import SparseEngine, SystemGeometry
-
+    from memory_dft.core.sparse_engine_unified import (
+        SparseEngine,
+        SystemGeometry,
+        HubbardAndersonGeometry,
+        HubbardAndersonParams,
+        LayerEnergies,
+        LayerLambda,
+    )
 
 # =============================================================================
 # Physical Constants
