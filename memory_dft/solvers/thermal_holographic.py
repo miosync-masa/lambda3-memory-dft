@@ -312,6 +312,81 @@ class ThermalHolographicEvolution:
         self.measurement = measurement
         self.thermal_analyzer = thermal_analyzer
         self.lindemann_critical = lindemann_critical
+
+    @classmethod
+    def from_hubbard_anderson(cls, 
+                              n_Fe: int = 4,
+                              C_positions: List[int] = None,
+                              params: HubbardAndersonParams = None,
+                              periodic: bool = True,
+                              gamma_memory: float = 0.1,
+                              eta_memory: float = 0.1,
+                              gate_delay: int = 1,
+                              n_eigenstates: int = 20) -> 'ThermalHolographicEvolution':
+        '''
+        Hubbard-Anderson モデルから初期化
+        
+        【物理的意味】
+          Fe + C 系の階層的トポロジーを持つシステム
+          
+          L₀: Fe 格子（コヒーレント、N × 0.5 nm）
+          L₁: C 配置（インコヒーレント、√N）
+          L₂: Fe-C 混成（コヒーレント、N × 30 μm）
+        
+        Args:
+            n_Fe: Fe サイト数
+            C_positions: C の挿入位置（Fe サイト間）
+            params: HubbardAndersonParams
+            periodic: 周期境界条件
+            ...
+            
+        Returns:
+            ThermalHolographicEvolution
+        '''
+        if C_positions is None:
+            C_positions = [n_Fe // 2]  # デフォルト: 中央に1つ
+        
+        if params is None:
+            params = HubbardAndersonParams()
+        
+        n_C = len(C_positions)
+        n_total = n_Fe + n_C
+        
+        # SparseEngine で構築
+        from memory_dft.core.sparse_engine import SparseEngine
+        
+        engine = SparseEngine(n_sites=n_total, use_gpu=False, verbose=False)
+        geometry = engine.build_Fe_chain_with_C(n_Fe, C_positions, periodic)
+        H_K, H_V = engine.build_hubbard_anderson(geometry, params)
+        
+        # Dense に変換（小規模系）
+        H_K_dense = H_K.toarray()
+        H_V_dense = H_V.toarray()
+        H = H_K_dense + H_V_dense
+        
+        # 各コンポーネント初期化
+        ensemble = ThermalEnsemble(H, n_eigenstates=n_eigenstates)
+        solver = DSESolver(H_K_dense, H_V_dense, 
+                          gamma_memory=gamma_memory, eta_memory=eta_memory)
+        measurement = HolographicMeasurement(gate_delay=gate_delay)
+        thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
+        
+        instance = cls(H_K_dense, H_V_dense, ensemble, solver, 
+                      measurement, thermal_analyzer)
+        
+        # 追加情報を保存
+        instance.geometry = geometry
+        instance.params = params
+        instance.engine = engine
+        
+        return instance
+    
+    def compute_layer_analysis(self, psi) -> LayerLambda:
+        '''層ごとの λ 解析（Hubbard-Anderson 用）'''
+        if not hasattr(self, 'geometry'):
+            raise ValueError("Layer analysis requires Hubbard-Anderson model")
+        
+        return self.engine.compute_layer_lambda(psi, self.geometry, self.params)
     
     @classmethod
     def from_hubbard(cls, n_sites: int = 4, t: float = 1.0, U: float = 2.0,
