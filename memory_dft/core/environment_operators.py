@@ -421,6 +421,32 @@ class ThermalEnsemble:
             'max_derivative': abs_deriv[idx_max],
             'scan_data': scan
         }
+
+    def get_thermal_state(self, T: float) -> np.ndarray:
+        """
+        温度 T での熱的混合状態を返す
+        
+        |ψ_thermal⟩ = Σ √w_n(T) |n⟩
+        
+        Args:
+            T: 温度 (K)
+            
+        Returns:
+            正規化された状態ベクトル
+        """
+        beta = T_to_beta(T)
+        weights = boltzmann_weights(self.eigenvalues, beta)
+        
+        psi_thermal = np.zeros(self.dim, dtype=np.complex128)
+        for n in range(self.n_eigenstates):
+            if weights[n] > 1e-15:
+                psi_thermal += np.sqrt(weights[n]) * self.eigenvectors[:, n]
+        
+        norm = np.linalg.norm(psi_thermal)
+        if norm > 1e-10:
+            psi_thermal /= norm
+        
+        return psi_thermal
     
     # =========================================================================
     # Thermodynamic quantities (computed correctly from ensemble)
