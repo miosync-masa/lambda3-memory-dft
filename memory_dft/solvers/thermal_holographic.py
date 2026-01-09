@@ -62,20 +62,20 @@ import warnings
 
 # Core environment operators（sparse_engine も re-export される）
 from memory_dft.core.environment_operators import (
-    # 温度関連
     ThermalEnsemble,
     ThermalObservable,
     boltzmann_weights,
     T_to_beta,
     K_B_EV,
-    # 構造関連（sparse_engine_unified から re-export）
+)
+
+from memory_dft.core.sparse_engine_unified import (
     SparseEngine,
     HubbardAndersonGeometry,
     HubbardAndersonParams,
     LayerEnergies,
     LayerLambda,
 )
-
 # Memory kernel
 from memory_dft.core.memory_kernel import MemoryKernel
 
