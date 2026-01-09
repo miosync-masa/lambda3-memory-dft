@@ -106,6 +106,7 @@ class HolographicMeasurement:
         self.holo = HolographicDual()
         self.records: List[MeasurementRecord] = []
         self.phi_history: List[float] = []
+        self._phi = 0.0
     
     def measure_from_evolution_result(self,
                                       result,  # EvolutionResult
@@ -274,6 +275,62 @@ class HolographicMeasurement:
         result.duality_results = duality
         
         return duality
+
+    def reset(self):
+        """測定状態をリセット"""
+        self.records.clear()
+        self.phi_history.clear()
+        self._phi = 0.0
+        self.holo = HolographicDual()
+    
+    def measure(self, lambda_value: float, dt: float) -> Dict[str, Any]:
+        """
+        単一ステップの Holographic 測定
+        
+        Args:
+            lambda_value: 現在の λ 値
+            dt: 時間刻み
+            
+        Returns:
+            {'lambda_pre', 'lambda_post', 'S_RT', 'phi'}
+        """
+        # PRE: 現在のλ
+        lambda_pre = lambda_value
+        
+        # POST: gate_delay 前の記録から（因果分離）
+        if len(self.records) >= self.gate_delay:
+            lambda_post = self.records[-self.gate_delay].lambda_pre
+        else:
+            lambda_post = lambda_value
+        
+        # 位相蓄積
+        self._phi += lambda_value * dt
+        self.phi_history.append(self._phi)
+        
+        # S_RT (Bulk entropy)
+        if len(self.phi_history) >= 2:
+            self.holo.history_to_bulk(self.phi_history)
+            S_RT = self.holo.rt_entropy()
+        else:
+            S_RT = 0.0
+        
+        # 記録
+        record = MeasurementRecord(
+            t=len(self.records),
+            lambda_pre=float(lambda_pre),
+            lambda_post=float(lambda_post),
+            S_RT=float(S_RT),
+            energy=0.0,
+            delta_lambda=float(lambda_post - lambda_pre)
+        )
+        self.records.append(record)
+        
+        return {
+            'lambda_pre': lambda_pre,
+            'lambda_post': lambda_post,
+            'S_RT': S_RT,
+            'phi': self._phi,
+        }
     
     def summary(self, result: HolographicMeasurementResult) -> str:
         """結果のサマリーを文字列で返す"""
