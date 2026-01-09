@@ -16,6 +16,7 @@ from .sparse_engine_unified import (
     # Geometry
     SystemGeometry,
     LatticeGeometry2D,
+    HubbardAndersonGeometry,  # ← 追加
     
     # Factory functions
     create_chain,
@@ -24,6 +25,11 @@ from .sparse_engine_unified import (
     
     # Result container
     ComputeResult,
+    
+    # Hubbard-Anderson  # ← 追加
+    HubbardAndersonParams,
+    LayerEnergies,
+    LayerLambda,
 )
 
 # Material Failure Analysis
@@ -121,6 +127,10 @@ __all__ = [
     'create_chain',
     'create_ladder',
     'create_square_lattice',
+    "HubbardAndersonGeometry",
+    "HubbardAndersonParams",
+    "LayerEnergies",
+    "LayerLambda"
     
     # Result
     'ComputeResult',
