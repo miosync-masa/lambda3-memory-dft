@@ -231,7 +231,6 @@ class SystemGeometry:
         plaq_str = f", {len(self.plaquettes)} plaq" if self.plaquettes else ""
         return f"SystemGeometry(N={self.n_sites}, {self.n_bonds} bonds{plaq_str})"
 
-
 class LatticeGeometry2D:
     """
     2D lattice geometry with configurable boundary conditions.
@@ -686,10 +685,7 @@ class SparseEngine:
     # Hamiltonian Construction
     # =========================================================================
 
-    # =========================================================================
     # Hubbard-Anderson Model
-    # =========================================================================
-    
     def build_Fe_chain_with_C(self, n_Fe: int = 4, 
                                C_positions: List[int] = None,
                                periodic: bool = True) -> HubbardAndersonGeometry:
