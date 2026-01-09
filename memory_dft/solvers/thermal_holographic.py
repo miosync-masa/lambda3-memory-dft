@@ -1,9 +1,14 @@
-#!/usr/bin/env python3
 """
-Thermal Holographic Evolution Module
-=====================================
+Thermal Holographic Evolution Module v2.1
+==========================================
 
 温度変化 × Memory効果 × Holographic測定 × 材料破壊予測
+
+【v2.1 変更点】
+  - SparseEngine 統合（_build_hubbard 削除）
+  - from_hubbard_anderson() 追加
+  - LayerLambda 解析追加
+  - インポート整理（environment_operators 経由）
 
 【核心的洞察】
   Energy = topology の結び目
@@ -17,6 +22,18 @@ Thermal Holographic Evolution Module
   → 全部 topology で統一！
   → トポロジー = 意味の保存則
 
+【階層的トポロジー（Hubbard-Anderson）】
+  L₀: Fe 格子トポロジー（コヒーレント、N × 0.5 nm）
+  L₁: C 配置トポロジー（インコヒーレント、√N）
+  L₂: Fe-C 混成トポロジー（コヒーレント、N × 30 μm）
+  
+  τ₀ = 10⁻¹³ s で：
+    電子: 30 μm 進む（コヒーレント）
+    格子: 0.5 nm 進む（コヒーレント）
+    C拡散: 0.03 Å 進む（インコヒーレント）← 相似変換に乗らない！
+  
+  → 残留応力 = 階層トポロジー間のミスマッチ
+
 【温度変化速度の効果】
   急冷（Quench）: dt小 → Memory効果強 → 非平衡凍結 → 残留応力
   徐冷（Anneal）: dt大 → Memory効果弱 → 平衡接近 → 応力解放
@@ -28,14 +45,37 @@ Thermal Holographic Evolution Module
   材料の残留応力 = 第5の力の閉じ込め
   中性子星の異常冷却 = 第5の力の漏れ出し
 
-【スケール階層】
-  音速 × τ₀ = 0.5 nm  ← 原子の世界（フォノン）
-  光速 × τ₀ = 30 μm   ← 結晶粒の世界（第5の力）
-  比率 c/v_s ≈ 60,000
-
 Author: Tamaki & Masamichi Iizumi
 Date: 2025-01
+Version: 2.1
 """
+
+__all__ = [
+    # Main class
+    "ThermalHolographicEvolution",
+    
+    # Data classes
+    "ThermalHolographicRecord",
+    "ThermalHolographicResult",
+    "ThermalPath",
+    "DualityMetrics",
+    "FailurePrediction",
+    
+    # Enums
+    "CoolingMode",
+    "TopologyState",
+    
+    # Constants
+    "TAU_0",
+    "C_LIGHT",
+    "V_SOUND",
+    "LAMBDA_LIGHT",
+    "LAMBDA_PHONON",
+    "SCALE_RATIO",
+    
+    # Utility
+    "info",
+]
 
 import numpy as np
 from typing import List, Dict, Any, Optional, Callable, Tuple, Union
@@ -47,13 +87,20 @@ import warnings
 # Imports from existing modules
 # =============================================================================
 
-# Core environment operators
+# Core environment operators（sparse_engine も re-export される）
 from memory_dft.core.environment_operators import (
+    # 温度関連
     ThermalEnsemble,
     ThermalObservable,
     boltzmann_weights,
     T_to_beta,
     K_B_EV,
+    # 構造関連（sparse_engine_unified から re-export）
+    SparseEngine,
+    HubbardAndersonGeometry,
+    HubbardAndersonParams,
+    LayerEnergies,
+    LayerLambda,
 )
 
 # Memory kernel
@@ -152,6 +199,9 @@ class ThermalHolographicRecord:
     # Memory
     gamma_memory: float           # Memory強度
     memory_contribution: float    # Memory項の寄与
+    
+    # Layer analysis (Hubbard-Anderson 用、optional)
+    layer_lambda: Optional[LayerLambda] = None
 
 
 @dataclass
@@ -235,9 +285,13 @@ class ThermalHolographicResult:
     duality: Optional[DualityMetrics] = None
     failure: Optional[FailurePrediction] = None
     
-    # 追加: Topology analysis results
+    # Topology analysis results
     thermal_topology: Optional[ThermalTopologyResult] = None
     stress_topology: Optional[StressTopologyResult] = None
+    
+    # Hubbard-Anderson 用
+    final_layer_lambda: Optional[LayerLambda] = None
+    final_psi: Optional[np.ndarray] = None
     
     def compute_summary(self):
         """サマリー統計を計算"""
@@ -262,6 +316,8 @@ class ThermalHolographicEvolution:
     温度変化 × Memory効果 × Holographic測定 × 材料破壊予測
     
     【統合アーキテクチャ】
+      SparseEngine (構造 → H_K, H_V)
+          ↓
       ThermalEnsemble (温度→分布→状態)
           ↓
       DSESolver (Memory付き時間発展)
@@ -269,12 +325,15 @@ class ThermalHolographicEvolution:
       HolographicMeasurement (PRE/POST λ, S_RT)
           ↓
       ThermalTopologyAnalyzer (Coherence, Lindemann, 破壊予測)
-          ↓
-      material_failure (計測・予測)
     
     Usage:
         # Hubbard モデルで初期化
         evolution = ThermalHolographicEvolution.from_hubbard(n_sites=4)
+        
+        # Hubbard-Anderson モデル（Fe + C）
+        evolution = ThermalHolographicEvolution.from_hubbard_anderson(
+            n_Fe=4, C_positions=[1]
+        )
         
         # 急冷
         result_quench = evolution.quench(T_start=1000, T_end=100)
@@ -293,7 +352,11 @@ class ThermalHolographicEvolution:
                  solver: DSESolver,
                  measurement: HolographicMeasurement,
                  thermal_analyzer: ThermalTopologyAnalyzer,
-                 lindemann_critical: float = 0.1):
+                 lindemann_critical: float = 0.1,
+                 # Hubbard-Anderson 用（optional）
+                 engine: Optional[SparseEngine] = None,
+                 geometry: Optional[HubbardAndersonGeometry] = None,
+                 params: Optional[HubbardAndersonParams] = None):
         """
         Args:
             H_K: 運動エネルギー項
@@ -303,6 +366,9 @@ class ThermalHolographicEvolution:
             measurement: Holographic 測定器
             thermal_analyzer: 熱トポロジー解析器
             lindemann_critical: Lindemann 臨界値
+            engine: SparseEngine（Hubbard-Anderson 用）
+            geometry: HubbardAndersonGeometry（Hubbard-Anderson 用）
+            params: HubbardAndersonParams（Hubbard-Anderson 用）
         """
         self.H_K = H_K
         self.H_V = H_V
@@ -312,7 +378,59 @@ class ThermalHolographicEvolution:
         self.measurement = measurement
         self.thermal_analyzer = thermal_analyzer
         self.lindemann_critical = lindemann_critical
+        
+        # Hubbard-Anderson 用
+        self.engine = engine
+        self.geometry = geometry
+        self.params = params
+        self._is_hubbard_anderson = geometry is not None
 
+    # =========================================================================
+    # Factory Methods
+    # =========================================================================
+    
+    @classmethod
+    def from_hubbard(cls, n_sites: int = 4, t: float = 1.0, U: float = 2.0,
+                     gamma_memory: float = 0.1, eta_memory: float = 0.1,
+                     gate_delay: int = 1,
+                     n_eigenstates: int = 20,
+                     periodic: bool = True) -> 'ThermalHolographicEvolution':
+        """
+        Hubbard モデルから初期化（SparseEngine 使用）
+        
+        Args:
+            n_sites: サイト数
+            t: ホッピングパラメータ
+            U: 相互作用強度
+            gamma_memory: Memory 減衰率
+            eta_memory: Memory 強度
+            gate_delay: Holographic gate delay
+            n_eigenstates: 計算する固有状態数
+            periodic: 周期境界条件
+            
+        Returns:
+            ThermalHolographicEvolution インスタンス
+        """
+        # SparseEngine で H を構築
+        engine = SparseEngine(n_sites=n_sites, use_gpu=False, verbose=False)
+        geometry = engine.build_chain(periodic=periodic)
+        H_K, H_V = engine.build_hubbard(geometry.bonds, t=t, U=U)
+        
+        # Dense に変換（小規模系）
+        H_K_dense = H_K.toarray() if hasattr(H_K, 'toarray') else np.array(H_K)
+        H_V_dense = H_V.toarray() if hasattr(H_V, 'toarray') else np.array(H_V)
+        H = H_K_dense + H_V_dense
+        
+        # 各コンポーネント初期化
+        ensemble = ThermalEnsemble(engine, H, n_eigenstates=n_eigenstates)
+        solver = DSESolver(H_K_dense, H_V_dense, 
+                          gamma_memory=gamma_memory, eta_memory=eta_memory)
+        measurement = HolographicMeasurement(gate_delay=gate_delay)
+        thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
+        
+        return cls(H_K_dense, H_V_dense, ensemble, solver, 
+                   measurement, thermal_analyzer, engine=engine)
+    
     @classmethod
     def from_hubbard_anderson(cls, 
                               n_Fe: int = 4,
@@ -323,8 +441,8 @@ class ThermalHolographicEvolution:
                               eta_memory: float = 0.1,
                               gate_delay: int = 1,
                               n_eigenstates: int = 20) -> 'ThermalHolographicEvolution':
-        '''
-        Hubbard-Anderson モデルから初期化
+        """
+        Hubbard-Anderson モデルから初期化（Fe + C 系）
         
         【物理的意味】
           Fe + C 系の階層的トポロジーを持つシステム
@@ -338,11 +456,14 @@ class ThermalHolographicEvolution:
             C_positions: C の挿入位置（Fe サイト間）
             params: HubbardAndersonParams
             periodic: 周期境界条件
-            ...
+            gamma_memory: Memory 減衰率
+            eta_memory: Memory 強度
+            gate_delay: Holographic gate delay
+            n_eigenstates: 計算する固有状態数
             
         Returns:
-            ThermalHolographicEvolution
-        '''
+            ThermalHolographicEvolution インスタンス
+        """
         if C_positions is None:
             C_positions = [n_Fe // 2]  # デフォルト: 中央に1つ
         
@@ -353,65 +474,25 @@ class ThermalHolographicEvolution:
         n_total = n_Fe + n_C
         
         # SparseEngine で構築
-        from memory_dft.core.sparse_engine import SparseEngine
-        
         engine = SparseEngine(n_sites=n_total, use_gpu=False, verbose=False)
         geometry = engine.build_Fe_chain_with_C(n_Fe, C_positions, periodic)
         H_K, H_V = engine.build_hubbard_anderson(geometry, params)
         
         # Dense に変換（小規模系）
-        H_K_dense = H_K.toarray()
-        H_V_dense = H_V.toarray()
+        H_K_dense = H_K.toarray() if hasattr(H_K, 'toarray') else np.array(H_K)
+        H_V_dense = H_V.toarray() if hasattr(H_V, 'toarray') else np.array(H_V)
         H = H_K_dense + H_V_dense
         
         # 各コンポーネント初期化
-        ensemble = ThermalEnsemble(H, n_eigenstates=n_eigenstates)
+        ensemble = ThermalEnsemble(engine, H, n_eigenstates=n_eigenstates)
         solver = DSESolver(H_K_dense, H_V_dense, 
                           gamma_memory=gamma_memory, eta_memory=eta_memory)
         measurement = HolographicMeasurement(gate_delay=gate_delay)
         thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
         
-        instance = cls(H_K_dense, H_V_dense, ensemble, solver, 
-                      measurement, thermal_analyzer)
-        
-        # 追加情報を保存
-        instance.geometry = geometry
-        instance.params = params
-        instance.engine = engine
-        
-        return instance
-    
-    def compute_layer_analysis(self, psi) -> LayerLambda:
-        '''層ごとの λ 解析（Hubbard-Anderson 用）'''
-        if not hasattr(self, 'geometry'):
-            raise ValueError("Layer analysis requires Hubbard-Anderson model")
-        
-        return self.engine.compute_layer_lambda(psi, self.geometry, self.params)
-    
-    @classmethod
-    def from_hubbard(cls, n_sites: int = 4, t: float = 1.0, U: float = 2.0,
-                     gamma_memory: float = 0.1, eta_memory: float = 0.1,
-                     gate_delay: int = 1,
-                     n_eigenstates: int = 20) -> 'ThermalHolographicEvolution':
-        """
-        Hubbard モデルから初期化
-        """
-        H_K, H_V = cls._build_hubbard(n_sites, t, U)
-        H = H_K + H_V
-        
-        # ThermalEnsemble (from environment_operators.py)
-        ensemble = ThermalEnsemble(H, n_eigenstates=n_eigenstates)
-        
-        # DSESolver (from dse_solver.py)
-        solver = DSESolver(H_K, H_V, gamma_memory=gamma_memory, eta_memory=eta_memory)
-        
-        # HolographicMeasurement (from holographic/measurement.py)
-        measurement = HolographicMeasurement(gate_delay=gate_delay)
-        
-        # ThermalTopologyAnalyzer (from material_failure.py)
-        thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
-        
-        return cls(H_K, H_V, ensemble, solver, measurement, thermal_analyzer)
+        return cls(H_K_dense, H_V_dense, ensemble, solver, 
+                   measurement, thermal_analyzer,
+                   engine=engine, geometry=geometry, params=params)
     
     @classmethod
     def from_hamiltonian(cls, H_K: np.ndarray, H_V: np.ndarray,
@@ -422,40 +503,42 @@ class ThermalHolographicEvolution:
         任意のハミルトニアンから初期化
         """
         H = H_K + H_V
+        n_sites = int(np.log2(H.shape[0]))
         
-        ensemble = ThermalEnsemble(H, n_eigenstates=n_eigenstates)
+        # ダミーの engine を作成
+        engine = SparseEngine(n_sites=n_sites, use_gpu=False, verbose=False)
+        
+        ensemble = ThermalEnsemble(engine, H, n_eigenstates=n_eigenstates)
         solver = DSESolver(H_K, H_V, gamma_memory=gamma_memory, eta_memory=eta_memory)
         measurement = HolographicMeasurement(gate_delay=gate_delay)
         thermal_analyzer = ThermalTopologyAnalyzer(ensemble)
         
         return cls(H_K, H_V, ensemble, solver, measurement, thermal_analyzer)
     
-    @staticmethod
-    def _build_hubbard(n_sites: int, t: float, U: float) -> Tuple[np.ndarray, np.ndarray]:
-        """Hubbard ハミルトニアンを構築"""
-        dim = 2 ** n_sites
-        bonds = [(i, (i + 1) % n_sites) for i in range(n_sites)]
+    # =========================================================================
+    # Layer Analysis (Hubbard-Anderson 用)
+    # =========================================================================
+    
+    def compute_layer_analysis(self, psi: np.ndarray) -> LayerLambda:
+        """
+        層ごとの λ 解析（Hubbard-Anderson 用）
         
-        H_K = np.zeros((dim, dim), dtype=complex)
-        H_V = np.zeros((dim, dim), dtype=complex)
+        Returns:
+            LayerLambda with lambda_Fe, lambda_C, lambda_total, lambda_mismatch
+        """
+        if not self._is_hubbard_anderson:
+            raise ValueError("Layer analysis requires Hubbard-Anderson model. "
+                           "Use from_hubbard_anderson() to create instance.")
         
-        for state in range(dim):
-            for (i, j) in bonds:
-                if (state >> i) & 1 and not ((state >> j) & 1):
-                    new_state = state ^ (1 << i) ^ (1 << j)
-                    sign = 1
-                    for k in range(min(i, j) + 1, max(i, j)):
-                        if (state >> k) & 1:
-                            sign *= -1
-                    H_K[new_state, state] += -t * sign
-                    H_K[state, new_state] += -t * sign
-            
-            for (i, j) in bonds:
-                ni = (state >> i) & 1
-                nj = (state >> j) & 1
-                H_V[state, state] += U * ni * nj
-        
-        return H_K, H_V
+        return self.engine.compute_layer_lambda(psi, self.geometry, self.params)
+    
+    def is_hubbard_anderson(self) -> bool:
+        """Hubbard-Anderson モデルかどうか"""
+        return self._is_hubbard_anderson
+    
+    # =========================================================================
+    # Evolution
+    # =========================================================================
     
     def _determine_topology_state(self, coherence: float, lindemann: float,
                                    lambda_value: float) -> TopologyState:
@@ -470,9 +553,15 @@ class ThermalHolographicEvolution:
             return TopologyState.COHERENT
     
     def evolve(self, thermal_path: ThermalPath,
-               verbose: bool = True) -> ThermalHolographicResult:
+               verbose: bool = True,
+               track_layers: bool = True) -> ThermalHolographicResult:
         """
         温度パスに沿って発展
+        
+        Args:
+            thermal_path: 温度パス
+            verbose: 進捗表示
+            track_layers: 層ごとの λ を追跡（Hubbard-Anderson 用）
         """
         # リセット
         self.solver.reset()
@@ -491,6 +580,10 @@ class ThermalHolographicEvolution:
             print(f"  Mode: {thermal_path.mode.value}")
             print(f"  T: {T_values[0]:.0f}K → {T_values[-1]:.0f}K")
             print(f"  Steps: {thermal_path.n_steps}")
+            if self._is_hubbard_anderson:
+                print(f"  Model: Hubbard-Anderson (Fe={self.geometry.n_Fe}, C={self.geometry.n_C})")
+            else:
+                print(f"  Model: Hubbard")
             print("=" * 60)
         
         for step, (T, dt) in enumerate(zip(T_values, dt_values)):
@@ -508,6 +601,11 @@ class ThermalHolographicEvolution:
             topology_state = self._determine_topology_state(
                 coherence, lindemann, solver_info['lambda']
             )
+            
+            # Layer 解析（Hubbard-Anderson 用）
+            layer_lambda = None
+            if track_layers and self._is_hubbard_anderson:
+                layer_lambda = self.compute_layer_analysis(psi)
             
             # 記録
             record = ThermalHolographicRecord(
@@ -527,18 +625,23 @@ class ThermalHolographicEvolution:
                 kinetic=solver_info['kinetic'],
                 potential=solver_info['potential'],
                 gamma_memory=solver_info['gamma_memory'],
-                memory_contribution=solver_info['memory_contribution']
+                memory_contribution=solver_info['memory_contribution'],
+                layer_lambda=layer_lambda
             )
             records.append(record)
             
             if verbose and step % max(1, thermal_path.n_steps // 10) == 0:
+                layer_str = ""
+                if layer_lambda:
+                    layer_str = f"  [Fe:{layer_lambda.lambda_Fe:.3f} C:{layer_lambda.lambda_C:.3f}]"
                 print(f"  Step {step:4d}: T={T:7.1f}K  λ={solver_info['lambda']:.4f}  "
-                      f"Coh={coherence:.3f}  δ={lindemann:.4f}  [{topology_state.value}]")
+                      f"Coh={coherence:.3f}  δ={lindemann:.4f}  [{topology_state.value}]{layer_str}")
         
         # 結果を構築
         result = ThermalHolographicResult(
             records=records,
-            thermal_path=thermal_path
+            thermal_path=thermal_path,
+            final_psi=psi
         )
         result.compute_summary()
         
@@ -550,6 +653,10 @@ class ThermalHolographicEvolution:
         
         # 最終温度での Topology 結果
         result.thermal_topology = self.thermal_analyzer.analyze_temperature(T_values[-1])
+        
+        # 最終の Layer λ（Hubbard-Anderson 用）
+        if self._is_hubbard_anderson:
+            result.final_layer_lambda = self.compute_layer_analysis(psi)
         
         if verbose:
             self._print_summary(result)
@@ -610,6 +717,17 @@ class ThermalHolographicEvolution:
         print(f"  Temperature: {result.T_range[0]:.0f}K → {result.T_range[1]:.0f}K")
         print(f"  λ range: [{result.lambda_range[0]:.4f}, {result.lambda_range[1]:.4f}]")
         print(f"  Coherence range: [{result.coherence_range[0]:.4f}, {result.coherence_range[1]:.4f}]")
+        
+        # Layer analysis（Hubbard-Anderson 用）
+        if result.final_layer_lambda:
+            print("\n--- Layer Analysis (Hubbard-Anderson) ---")
+            ll = result.final_layer_lambda
+            print(f"  λ_Fe (格子層):     {ll.lambda_Fe:.4f}")
+            print(f"  λ_C (拡散層):      {ll.lambda_C:.4f}")
+            print(f"  λ_total:           {ll.lambda_total:.4f}")
+            print(f"  λ mismatch:        {ll.lambda_mismatch:.4f}")
+            if ll.lambda_mismatch > 0.3:
+                print("  ⚠ HIGH MISMATCH → 残留応力大")
         
         print("\n--- Duality (AdS/CFT) ---")
         d = result.duality
@@ -698,6 +816,10 @@ class ThermalHolographicEvolution:
         f2 = "YES" if result2.failure.will_fail else "NO"
         print(f"{'Failure':<25} {f1:<20} {f2:<20}")
         
+        # Layer mismatch（Hubbard-Anderson 用）
+        if result1.final_layer_lambda and result2.final_layer_lambda:
+            print(f"{'λ mismatch':<25} {result1.final_layer_lambda.lambda_mismatch:<20.4f} {result2.final_layer_lambda.lambda_mismatch:<20.4f}")
+        
         print("-" * 65)
         
         mem1 = np.mean([r.memory_contribution for r in result1.records])
@@ -723,7 +845,7 @@ class ThermalHolographicEvolution:
 def info():
     """パッケージ情報を表示"""
     print("=" * 60)
-    print("Thermal Holographic Evolution")
+    print("Thermal Holographic Evolution v2.1")
     print("=" * 60)
     print()
     print("Physical Constants:")
@@ -740,7 +862,12 @@ def info():
     print("  Energy = Topology (結び目)")
     print("  Quench → 残留応力 (結び目凍結) → Strong Duality")
     print("  Anneal → 応力解放 (結び目緩和) → Weak Duality")
-    print("  第5の力 = トポロジカル結び目のリコネクション")
+    print()
+    print("Hubbard-Anderson (Fe + C):")
+    print("  L₀: Fe 格子 (0.5 nm/τ₀, コヒーレント)")
+    print("  L₁: C 配置 (√N, インコヒーレント)")
+    print("  L₂: Fe-C 混成 (30 μm/τ₀, コヒーレント)")
+    print("  → 残留応力 = 層間トポロジーミスマッチ")
     print("=" * 60)
 
 
@@ -749,4 +876,3 @@ def info():
 # =============================================================================
 
 if __name__ == "__main__":
-    info()
