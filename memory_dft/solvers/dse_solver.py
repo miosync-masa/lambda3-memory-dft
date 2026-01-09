@@ -321,6 +321,7 @@ class DSESolver:
         # 内部状態
         self._history_states: List[np.ndarray] = []
         self._history_times: List[float] = []
+        self.time = 0.0
     
     # =========================================================================
     # Factory Methods
@@ -449,6 +450,35 @@ class DSESolver:
             psi_mem = psi_mem / norm
         
         return psi_mem
+
+    def reset(self):
+        """状態をリセット"""
+        self._history_states.clear()
+        self._history_times.clear()
+        self.time = 0.0
+        if self.kernel is not None and HAS_MEMORY_KERNEL:
+            self.kernel = MemoryKernel(gamma_memory=self.gamma_memory, 
+                                        use_gpu=self.use_gpu)
+
+    def step(self, psi, dt) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        1ステップ発展（thermal_holographic_evolution用）
+        """
+        psi_new, mem_contrib = self.evolve_step(psi, self.time, dt)
+        self.time += dt
+        
+        xp = self.xp
+        K = float(xp.real(xp.vdot(psi_new, self.H_K @ psi_new)))
+        V = float(xp.real(xp.vdot(psi_new, self.H_V @ psi_new)))
+        
+        return psi_new, {
+            'lambda': self.compute_lambda(psi_new),
+            'energy': self.compute_energy(psi_new),
+            'kinetic': K,
+            'potential': V,
+            'gamma_memory': self.gamma_memory,
+            'memory_contribution': mem_contrib,
+        }
     
     def evolve_step(self, psi, t: float, dt: float) -> Tuple[np.ndarray, float]:
         """
