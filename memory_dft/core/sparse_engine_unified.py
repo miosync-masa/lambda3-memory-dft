@@ -27,7 +27,7 @@ Author: Masamichi Iizumi, Tamaki Iizumi
 
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field 
 
 # GPU support (optional)
 try:
