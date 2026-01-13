@@ -9,7 +9,7 @@ description = "Direct Schrödinger Evolution (DSE) - First-Principles History-De
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Masamichi Iizumi", email = "masa@miosync.com"},
+    {name = "Masamichi Iizumi", email = "m.iizumi@miosync.email"},
     {name = "Tamaki Iizumi"}
 ]
 keywords = [
