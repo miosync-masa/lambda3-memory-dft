@@ -34,7 +34,7 @@ jobs:
     if: github.event_name == 'release'
     environment:
       name: pypi
-      url: https://pypi.org/project/memory-dft/
+      url: https://pypi.org/project/lambda3-memory-dft/
     permissions:
       id-token: write
     steps:
